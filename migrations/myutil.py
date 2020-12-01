@@ -1,6 +1,10 @@
-from odoo.upgrade import util
+# -*- coding: utf-8 -*-
 
 import logging
+
+from odoo.upgrade import util
+
+
 _logger = logging.getLogger(__name__)
 
 
