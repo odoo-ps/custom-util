@@ -20,6 +20,27 @@ def custom_rename_field(cr, model, old, new):
     _logger.info('rename field : %s -> %s on model %s'  % (old, new, model))
 
 
+def custom_rename_module(cr, old, new):
+    """
+    Renames a custom module from the old name to the new one.
+
+    Using `util.rename_module` for custom modules fails, it's only intended to be
+    used in `base` `pre` migration scripts, and it doesn't check for module records
+    created by `ir_module.py` `update_list()` that runs before any other migration.
+    So if the new module is found in the addons path, the renaming will raise
+    a unique name constraint error with those added records.
+
+    This function checks and removes such existing module record, if it's in a
+    `uninstalled` or `to install` state, before attempting the rename.
+    """
+    if not modules_already_installed(cr, new):
+        util.remove_module(cr, new)
+
+    # TODO: Maybe do more sanity checks on new/old module current db states
+
+    util.rename_module(cr, old, new)
+
+
 #FIXME Update all fields where related contains the old field (be sure it's pointing the right model)
 def update_related_field(cr, list_fields):
     """ Syntax of list_fields = [('sale.order.line', 'x_mo_id', 'mo_id'),]"""
@@ -45,6 +66,22 @@ def update_custom_views(cr, list_fields):
             view_has_changed = True
         if view_has_changed:
           view_id.arch = view_id_tmp
+
+
+def modules_already_installed(cr, *modules):
+    """return True if all `modules` are already installed"""
+    if not modules:
+        raise AttributeError("Must provide at least one module name to check")
+    cr.execute(
+        """
+            SELECT count(1)
+              FROM ir_module_module
+             WHERE name IN %s
+               AND state IN %s
+    """,
+        [modules, ("installed", "to upgrade")],
+    )
+    return cr.fetchone()[0] == len(modules)
 
 
 def _force_migration_of_fresh_modules(cr, modules):
