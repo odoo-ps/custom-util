@@ -51,6 +51,70 @@ def update_related_field(cr, list_fields):
           cr.execute("""UPDATE ir_model_fields SET related = REPLACE(related, %s, %s) WHERE id = %s""", (old, new, field_id.id))
 
 
+def update_relationships(cr, model, old_id, new_id):
+    """
+    Updates relationships to the given model from an old record to the new one.
+
+    N.B. `reference` and `many2one_reference` are not handled.
+    """
+    cr.execute(
+        """
+        SELECT name, model, ttype, relation_table, column1, column2
+          FROM ir_model_fields
+         WHERE relation = %s
+           AND ttype IN ('many2one', 'many2many')
+           AND store IS TRUE
+        """,
+        [model],
+    )
+    related_fields = cr.fetchall()
+
+    if not related_fields:
+        return
+
+    _logger.info(
+        f'Updating relationships to "{model}" from record id {old_id} to {new_id}'
+    )
+
+    for name, model, ttype, relation_table, column1, column2 in related_fields:
+        if ttype == "many2one":
+            cr.execute(
+                """
+                UPDATE "{table}"
+                   SET "{column}" = %(new_id)s
+                 WHERE "{column}" = %(old_id)s
+                """.format(
+                    table=util.table_of_model(cr, model), column=name
+                ),
+                dict(old_id=old_id, new_id=new_id),
+            )
+        elif ttype == "many2many":
+            cr.execute(
+                """
+                INSERT INTO "{table}" ("{column1}", "{column2}")
+                     SELECT "{column1}", %(new_id)s
+                       FROM "{table}"
+                      WHERE "{column2}" = %(old_id)s
+                ON CONFLICT DO NOTHING
+                """.format(
+                    table=relation_table, column1=column1, column2=column2
+                ),
+                dict(old_id=old_id, new_id=new_id),
+            )
+            cr.execute(
+                """
+                DELETE FROM "{table}"
+                      WHERE "{column2}" = %(old_id)s
+                """.format(
+                    table=relation_table, column2=column2
+                ),
+                dict(old_id=old_id),
+            )
+        else:
+            _logger.error(f'Got unhandled ttype "{ttype}" for field "{model}.{name}"')
+            continue
+
+
 # Update all views that contains old fields
 def update_custom_views(cr, list_fields):
     """ Syntax of list_fields = [('sale.order.line', 'x_mo_id', 'mo_id'),]"""
@@ -82,6 +146,96 @@ def modules_already_installed(cr, *modules):
         [modules, ("installed", "to upgrade")],
     )
     return cr.fetchone()[0] == len(modules)
+
+
+def merge_groups(cr, src_xmlid, dest_xmlid):
+    """
+    Merges a `res.groups` into another.
+
+    :param cr: the db cursor
+    :param src_xmlid: the `xml id` of the source group (to be merged)
+    :param dest_xmlid: the `xml id` of the destination group (to merge into)
+    :return: True if merging was successful, None if no merging was performed
+        (eg. one of the two groups record and/or xml reference does not exist)
+    """
+    def group_info(xmlid):
+        nonlocal cr
+        gid = util.ref(cr, xmlid)
+        if gid is None:
+            return None
+        cr.execute(
+            """
+            SELECT name
+              FROM res_groups
+             WHERE id = %s
+            """,
+            [gid],
+        )
+        (name,) = cr.fetchone()
+        return gid, name
+
+    src_gid, src_name = group_info(src_xmlid)
+    dest_gid, dest_name = group_info(dest_xmlid)
+
+    if src_gid is None or dest_gid is None:
+        group_info_t = '(id={gid}, name="{name}", xmlid="{xmlid}")'
+        if src_gid is None:
+            _logger.info(
+                "Cannot merge groups, source group not found (already merged?) "
+                + group_info_t.format(gid=src_gid, name=src_name, xmlid=src_xmlid)
+            )
+        elif dest_gid is None:
+            _logger.warning(
+                "Cannot merge groups, destination group not found "
+                + group_info_t.format(gid=dest_gid, name=dest_name, xmlid=dest_xmlid)
+            )
+        return None
+
+    # Collect users being added to the destination group, for logging purposes
+    cr.execute(
+        """
+        WITH added_uids AS (
+            SELECT uid
+              FROM res_groups_users_rel
+             WHERE gid = %(src_gid)s
+            EXCEPT
+            SELECT uid
+              FROM res_groups_users_rel
+             WHERE gid = %(dest_gid)s
+        )
+        SELECT uid, login
+          FROM res_users
+          JOIN added_uids
+            ON res_users.id = added_uids.uid;
+        """,
+        dict(src_gid=src_gid, dest_gid=dest_gid),
+    )
+    added_users = list(cr.fetchall())
+
+    _logger.info(f'Merging group "{src_xmlid}" => "{dest_xmlid}"')
+
+    util.split_group(cr, src_gid, dest_gid)
+    update_relationships(cr, "res.groups", src_gid, dest_gid)
+    util.remove_record(cr, src_xmlid)
+
+    if added_users:
+        added_users_md = "\n".join(
+            f" - uid: **{uid}**, login: `{login}`" for uid, login in added_users
+        )
+        message = (
+            f"The group `{src_name}` has been merged into group `{dest_name}`. \n"
+            "The following users have been added to the destination group:\n"
+            f"{added_users_md}\n"
+            "Please make sure these users should *actually* have access to "
+            "the additional rights and permissions granted by their new group."
+        )
+        util.add_to_migration_reports(
+            message=message,
+            category="Merged Groups",
+            format="md",
+        )
+
+    return True
 
 
 def _force_migration_of_fresh_modules(cr, modules):
