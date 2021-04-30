@@ -1,11 +1,32 @@
 # -*- coding: utf-8 -*-
 
 import logging
+import os
 
 from odoo.upgrade import util
 
 
 _logger = logging.getLogger(__name__)
+
+
+# --- Patching `util._get_base_version()`
+
+def _patched_get_base_version(cr):
+    """
+    Patched version of `util._get_base_version()` that works outside of `base` module,
+    by setting `__base_version` in `util.ENVIRON` from `base` version in the database.
+    """
+    if not util.ENVIRON.get("__base_version") and not os.getenv("ODOO_BASE_VERSION"):
+        cr.execute("SELECT latest_version FROM ir_module_module WHERE name='base'")
+        util.ENVIRON["__base_version"] = util.parse_version(cr.fetchone()[0])
+
+    return _original_get_base_version(cr)
+
+
+_original_get_base_version = util._get_base_version
+util._get_base_version = _patched_get_base_version
+
+# --- Done patching
 
 
 def custom_rename_model(cr, old, new):
