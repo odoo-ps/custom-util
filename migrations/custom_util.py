@@ -23,8 +23,14 @@ def _patched_get_base_version(cr):
     return _original_get_base_version(cr)
 
 
-_original_get_base_version = util._get_base_version
-util._get_base_version = _patched_get_base_version
+try:
+    # For new refactored `util` package
+    _original_get_base_version = util.inherit._get_base_version
+    util.inherit._get_base_version = _patched_get_base_version
+except AttributeError:
+    # For old `util.py` code structure
+    _original_get_base_version = util._get_base_version
+    util._get_base_version = _patched_get_base_version
 
 # --- Done patching
 
