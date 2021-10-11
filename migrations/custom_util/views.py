@@ -4,9 +4,9 @@ and other xml documents in a database.
 """
 import enum
 import logging
-import re
 from abc import ABC, abstractmethod
 from textwrap import dedent
+from typing import Pattern
 
 from lxml import etree
 
@@ -505,7 +505,7 @@ class ReplaceValue(XPathOperation):
 
     :param pattern: The value to search and replace.
         It will replace *all* the occurrences of the str/pattern in the elements matched.
-    :type pattern: `str` or :class:`re.Pattern`
+    :type pattern: `str` or :class:`Pattern` (compiled regex pattern)
     :param repl: The new value to assign.
         A replacement pattern can be used (same as the ones used in `re.sub`)
         if the ``pattern`` argument provided is a compiled regex.
@@ -547,7 +547,7 @@ class ReplaceValue(XPathOperation):
             """
             if not value:
                 return None
-            if isinstance(pattern, re.Pattern):
+            if isinstance(pattern, Pattern):
                 if not pattern.search(value):
                     return None
                 return pattern.sub(repl, value)
