@@ -64,7 +64,7 @@ except AttributeError:
 
 
 def custom_rename_model(cr, old, new):
-    cr.execute("UPDATE ir_model SET state='base' WHERE model=%s", (old))
+    cr.execute("UPDATE ir_model SET state='base' WHERE model=%s", (old,))
     util.rename_model(cr, old, new)
     _logger.info('rename model : %s -> %s' % (old, new))
 
