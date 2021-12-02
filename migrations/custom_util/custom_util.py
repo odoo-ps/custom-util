@@ -320,7 +320,7 @@ def _merge_modules(cr, src_modules, dest_module):
 
     for module in src_modules:
         _logger.info('Merging %s ⟹ %s' % (module, dest_module))
-        util.merge_module(cr, module, dest_module, without_deps=True)
+        util.merge_module(cr, module, dest_module, update_dependers=False)
 
 
 def _uninstall_modules(cr, modules):
