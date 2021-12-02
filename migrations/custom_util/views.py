@@ -31,6 +31,8 @@ __all__ = [
     "UpdateAttributes",
     "ReplacePosition",
     "ReplaceValue",
+    "remove_broken_dashboard_actions",
+    "cleanup_old_dashboards",
 ]
 
 
@@ -565,3 +567,60 @@ class ReplaceValue(XPathOperation):
                 new_value = match_and_replace(self.pattern, self.repl, el.text)
                 if new_value is not None:
                     el.text = new_value
+
+
+def remove_broken_dashboard_actions(cr, broken_elements_xpaths, views_ids=None):
+    """
+    Removes matched elements from the dashboard views (``ir.ui.view.custom``).
+    Useful to delete invalid saved views/filters in the dashboard that cannot be
+    removed by the user through the UI (usually because of JS errors).
+
+    :param cr: the database cursor object.
+    :param broken_elements_xpaths: an iterable of xpaths to match in the dashboard views
+        xml arch for the elements to remove.
+    :param views_ids: apply only on the specified (``ir.ui.view.custom``) ids
+        instead of all the dashboard views.
+    """
+    _logger.info("Fixing/removing broken dashboard actions")
+    env = util.env(cr)
+    if views_ids:
+        boards_views = env["ir.ui.view.custom"].browse(views_ids)
+    else:
+        boards_ref_view = env.ref("board.board_my_dash_view")
+        boards_views = env["ir.ui.view.custom"].search(
+            [("ref_id", "=", boards_ref_view.id)]
+        )
+    for board_view in boards_views:
+        xml = etree.fromstring(board_view.arch)
+        for xpath in broken_elements_xpaths:
+            for element in xml.xpath(xpath):
+                element.getparent().remove(element)
+        board_view.arch = etree.tostring(xml, encoding="unicode")
+
+
+def cleanup_old_dashboards(cr):
+    """
+    Dashboard views records are created using Copy-on-Write (COW) and in the actual
+    view only the last one is used (greatest create_date). All other versions remain
+    in the database untouched and unused (but allowing the user to revert to a previous
+    version in case of errors).
+    This function removes all dashboard views for each user except for the most recent one.
+
+    :param cr: the database cursor object.
+    """
+    # Delete obsolete (COW) dashboard records
+    _logger.info("Cleaning up obsolete dashboard records (COW)")
+    cr.execute(
+        """
+        WITH sorted_dashboards AS (
+            SELECT id, ROW_NUMBER() OVER (PARTITION BY user_id, ref_id
+                                          ORDER BY create_date DESC) AS row_no
+              FROM ir_ui_view_custom
+        )
+        DELETE FROM ir_ui_view_custom iuvc
+         WHERE EXISTS (SELECT 1
+                         FROM sorted_dashboards d
+                        WHERE d.id = iuvc.id AND d.row_no > 1)
+        """
+    )
+    _logger.info(f"Deleted {cr.rowcount} old dashboard views")
