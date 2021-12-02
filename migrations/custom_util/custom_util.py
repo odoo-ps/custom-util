@@ -31,6 +31,7 @@ __all__ = [
     "_upgrade_standard_models",
     "STUDIO_XMLID_RE",
     "get_ids",
+    "migrate_invoice_move_data",
 ]
 
 
@@ -610,3 +611,49 @@ def get_ids(cr, ids_or_xmlids=None, *more_ids_or_xmlids, model, ids=None, xmlids
         ids |= {row[0] for row in cr.fetchall()}
 
     return ids
+
+
+def migrate_invoice_move_data(cr, fields, overwrite=False):
+    """
+    Migrate ``account.invoice`` fields data over to ``account.move``.
+    Useful to fix lost data due to accountpocalypse (Odoo 12->13).
+    All columns/fields must already exist, so use this in a ``post-`` script.
+
+    :param cr: the database cursor object
+    :param fields: an iterable of field names `str` or 2-tuples, where the first element
+        of the tuple is the name of the source field in ``account.invoice`` and the
+        second element is the name of the destination field in ``account.move``.
+    :param overwrite: if set to `True` will overwrites existing values in ``account.move``
+        with the ones from ``account.invoice``, otherwise will preserve any data
+        that already exists in ``account.move`` columns, writing only missing values.
+        Defaults to `False`.
+    """
+    set_stmts = []
+    where_not_null = []
+    for field_spec in fields:
+        if isinstance(field_spec, str):
+            invoice_field = move_field = field_spec
+        elif isinstance(field_spec, (tuple, list)) and len(field_spec) == 2:
+            invoice_field, move_field = field_spec
+        else:
+            raise ValueError(f"Field must be a string or a 2-tuple, got: {field_spec}")
+
+        set_stmts.append(
+            f"{move_field} = "
+            + (
+                f"ai.{invoice_field}"
+                if overwrite
+                else f"COALESCE(am.{move_field}, ai.{invoice_field})"
+            )
+        )
+        where_not_null.append(f"ai.{invoice_field} IS NOT NULL")
+
+    cr.execute(
+        f"""
+        UPDATE account_move am
+           SET {", ".join(set_stmts)}
+          FROM account_invoice ai
+         WHERE ai.move_id = am.id
+           AND ({" OR ".join(where_not_null)});
+        """
+    )
