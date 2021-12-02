@@ -13,6 +13,7 @@ from odoo.upgrade import util
 __all__ = [
     "custom_rename_model",
     "custom_rename_field",
+    "transfer_custom_fields",
     "custom_rename_module",
     "update_related_field",
     "update_relationships",
@@ -74,6 +75,33 @@ def custom_rename_field(cr, model, old, new):
     cr.execute("UPDATE ir_model_fields SET state='base' WHERE model=%s AND name=%s", (model, old))
     util.rename_field(cr, model, old, new)
     _logger.info('rename field : %s -> %s on model %s'  % (old, new, model))
+
+
+def transfer_custom_fields(cr, src_module, dest_module, fields_to_transfer):
+    """
+    Move fields from the one module to the other, optionally renaming them.
+
+    :param cr: database cursor object
+    :param src_module: the name of the source module for the fields
+    :param dest_module: the name of the destination module for the fields
+    :param fields_to_transfer: an iterable of 2- or 3-tuples with the following spec:
+        2-tuples: (model_name, field_name)  # just moves the fields
+        3-tuples: (model_name, existing_field_name, new_field_name)  # also renames the fields
+    :raise ValueError: if one of the values of ``fields_to_transfer`` is not a valid tuple
+    """
+    _logger.info(f'Transferring custom/studio fields to "{dest_module}"')
+    for field_spec in fields_to_transfer:
+        field_new_name = None
+        if len(field_spec) == 2:
+            model, field_name = field_spec
+        elif len(field_spec) == 3:
+            model, field_name, field_new_name = field_spec
+        else:
+            raise ValueError(f"Field rename must be a 2- or 3-tuple, got: {field_spec}")
+        util.move_field_to_module(cr, model, field_name, src_module, dest_module)
+        if field_new_name is None:
+            field_new_name = re.sub(r"^x_(?:studio_)?", "", field_name)
+        custom_rename_field(cr, model, field_name, field_new_name)
 
 
 def custom_rename_module(cr, old, new):
