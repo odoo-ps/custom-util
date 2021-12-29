@@ -32,7 +32,7 @@ __all__ = [
     "ReplacePosition",
     "ReplaceValue",
     "remove_broken_dashboard_actions",
-    "cleanup_old_dashboards",
+    "cleanup_old_dashboards"
 ]
 
 

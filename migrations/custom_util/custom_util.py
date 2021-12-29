@@ -3,6 +3,8 @@
 import logging
 import os
 import re
+import inspect
+import pathlib
 from typing import Collection
 
 from odoo.upgrade import util
@@ -24,6 +26,7 @@ __all__ = [
     "_merge_modules",
     "_uninstall_modules",
     "_rename_xmlid",
+    "rename_xmlids",
     "_check_models",
     "_rename_field",
     "_rename_m2m_relations",
@@ -33,6 +36,7 @@ __all__ = [
     "STUDIO_XMLID_RE",
     "get_ids",
     "migrate_invoice_move_data",
+    "get_migscript_module"
 ]
 
 
@@ -360,31 +364,40 @@ def _uninstall_modules(cr, modules):
         util.remove_module(cr, module)
 
 
-def _rename_xmlid(cr, values, module):
+def _rename_xmlid(cr, values_or_xmlid, module):
     """
     """
 
     noupdate = None
 
-    if isinstance(values, str):
+    if isinstance(values_or_xmlid, str):
 
-        if '.' not in values:
-            _logger.error('Skipping renaming %s, it must be a fully qualified external identifier' % values)
+        if '.' not in values_or_xmlid:
+            _logger.error(f'Skipping renaming {values_or_xmlid}, it must be a fully qualified external identifier')
+            return
 
         dest_module = module
-        src_module, _, name = values.partition('.')
+        src_module, name = values_or_xmlid.split('.')
         new_name = name
 
     else:
 
-        values = list(values)
-        if len(values) < 4:
+        # append empty kwargs
+        values = list(values_or_xmlid)
+        if len(values) < 3:
+            _logger.error(
+                f"Skipping renaming for {values_or_xmlid}, please provide either fully "
+                "qualified external identifier or "
+                "(src_module or None, dest_module or None, name, (kwargs)) as 2nd parameter"
+            )
+            return
+        elif len(values) < 4:
             values.append({})
 
         src_module, dest_module, name, kwargs = values
 
         if not name:
-            _logger.error('Skipping renaming for %s, missing name' % values)
+            _logger.error(f'Skipping renaming for {values_or_xmlid}, missing name')
             return
 
         if not src_module:
@@ -401,7 +414,8 @@ def _rename_xmlid(cr, values, module):
         if 'new_name' in kwargs:
             new_name = kwargs['new_name']
 
-    if not util.modules_installed(cr, *{dest_module, src_module}):
+    modules_to_check = (dest_module, src_module) if dest_module != src_module else (src_module,)
+    if not util.modules_installed(cr, *modules_to_check):
         _logger.error('Skipping renaming %s ⟹ %s because some of the modules (%s, %s) do not exist' % (name, new_name, src_module, dest_module))
         return
 
@@ -416,6 +430,30 @@ def _rename_xmlid(cr, values, module):
         new_xmlid,
         noupdate=noupdate
     )
+
+# TODO merge/alias w/ _rename_xmlid (abk: yes; msc: no)?
+def rename_xmlids(cr, pairs, detect_module=True, noupdate=False):
+    """
+    Rename a batch of views/xmlids
+    """
+    if detect_module:
+        module = get_migscript_module()
+        pairsplit = lambda pair: [(module, name) for name in pair]
+    else:
+        pairsplit = lambda pair: [xmlid.split('.') for xmlid in pair]
+    
+    kwargs = {"noupdate": noupdate}
+    for pair in pairs:
+        try:
+            (old_module, old_name), (new_module, new_name) = pairsplit(pair)
+        except ValueError:
+            _logger.error(f"Skipping {pair}. Please use fully qualified xmlid or name and module detection")
+            continue
+
+        kwargs.update({'new_name': new_name})
+        values = (old_module, new_module, old_name, kwargs)
+        
+        _rename_xmlid(cr, values, None)
 
 
 def _check_models(cr, old, new):
@@ -685,3 +723,15 @@ def migrate_invoice_move_data(cr, fields, overwrite=False):
            AND ({" OR ".join(where_not_null)});
         """
     )
+
+
+def get_migscript_module():
+    """
+    When function is called from within a migscript (which it should)
+    returns the module of the migscript
+    """
+    for frame in inspect.stack():
+        if frame.function == 'migrate':
+            path = pathlib.PurePath(frame.filename)
+            return path.parts[-4]
+    raise RuntimeError("Could not automatically determine calling migration script module name")
