@@ -9,6 +9,8 @@ from typing import Collection
 
 from odoo.upgrade import util
 
+from . import refactor
+
 
 # TODO: some of these functions should probably be renamed.
 # export also some private _members
@@ -75,10 +77,21 @@ def custom_rename_model(cr, old, new):
     _logger.info('rename model : %s -> %s' % (old, new))
 
 
-def custom_rename_field(cr, model, old, new):
-    cr.execute("UPDATE ir_model_fields SET state='base' WHERE model=%s AND name=%s", (model, old))
+def rename_field(cr, model, old, new, set_state_base=True, add_to_refactor=True):
+    if set_state_base:
+        state_value = "base" if isinstance(set_state_base, bool) else set_state_base
+        cr.execute(
+            "UPDATE ir_model_fields SET state = %s WHERE model = %s AND name = %s",
+            (state_value, model, old),
+        )
     util.rename_field(cr, model, old, new)
-    _logger.info('rename field : %s -> %s on model %s'  % (old, new, model))
+    if add_to_refactor:
+        refactor.FIELD_RENAMES_PENDING[model][old] = new
+
+
+def custom_rename_field(cr, model, old, new):
+    rename_field(cr, model, old, new, set_state_base=True)
+    _logger.info('rename field : %s -> %s on model %s' % (old, new, model))
 
 
 def transfer_custom_fields(cr, src_module, dest_module, fields_to_transfer):
@@ -482,8 +495,7 @@ def _rename_field(cr, model, table, old, new, old_modelname=None, remove=False):
 
         _logger.info('Renaming %s\'s field: %s ⟹ %s' % (model, old, new))
 
-        util.rename_field(cr, model, old, new)
-        cr.execute("UPDATE ir_model_fields SET state = 'base' WHERE model = %s AND name = %s", (model, new))
+        rename_field(cr, model, old, new, set_state_base=True)
 
     else:
         _logger.info('Removing %s\'s field: %s' % (old_modelname or model, old))
