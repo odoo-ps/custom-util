@@ -31,6 +31,7 @@ __all__ = [
     "UpdateAttributes",
     "ReplacePosition",
     "ReplaceValue",
+    "MoveElements",
     "remove_broken_dashboard_actions",
     "cleanup_old_dashboards"
 ]
@@ -567,6 +568,42 @@ class ReplaceValue(XPathOperation):
                 new_value = match_and_replace(self.pattern, self.repl, el.text)
                 if new_value is not None:
                     el.text = new_value
+
+
+class MoveElements(XPathOperation):
+    """
+    Moves the matched xml elements inside the specified destination element.
+
+    Examples::
+        MoveElements("//xpath[contains(@expr, \"class='col-md-12'\")]/div", "/data")
+
+    :param xpaths: an xpath `str` or an iterable of xpaths.
+        See :class:`XPathOperation` for additional info about this argument.
+    :param destination: an xpath of the destination element which to move
+        the matched ones to. It must match only one element, will raise an error.
+    :param prune_parents: if True (default), removes the ancestor elements that
+        are left empty after moving the matched elements.
+    """
+
+    def __init__(self, xpaths, destination, prune_parents=True):
+        super().__init__(xpaths)
+        [self.destination] = list(self.generate_xpaths([destination]))
+        self.prune_parents = prune_parents
+
+    def _prune_empty(self, element):
+        """Remove the given element if empty and recursively its ancestors"""
+        parent_el = element.getparent()
+        if parent_el and not len(element) and not element.text.strip():
+            parent_el.remove(element)
+            self._prune_empty(parent_el)
+
+    def __call__(self, arch):
+        [dest_el] = self.destination(arch)
+        for el in self.get_elements(arch):
+            parent_el = el.getparent()
+            dest_el.append(el)
+            if self.prune_parents:
+                self._prune_empty(parent_el)
 
 
 def remove_broken_dashboard_actions(cr, broken_elements_xpaths, views_ids=None):
