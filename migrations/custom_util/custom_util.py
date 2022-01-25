@@ -24,6 +24,7 @@ __all__ = [
     "update_custom_views",
     "modules_already_installed",
     "merge_groups",
+    "merge_model_and_data",
     "_force_migration_of_fresh_modules",
     "_merge_modules",
     "_uninstall_modules",
@@ -360,6 +361,68 @@ def _force_migration_of_fresh_modules(cr, modules):
                SET latest_version = %s
              WHERE name = %s
         """, (version, module,))
+
+
+def merge_model_and_data(cr, source_model, target_model, copy_fields, set_values=None):
+    """
+    Merges a model into another, copying the records, mapping fields, setting missing values.
+    Columns present in ``copy_fields`` but missing in the target model's table will
+    be automatically created, using the source table's column type.
+    IDs on the old model and their references will be remapped to the new ones in the
+    target model's table.
+
+    :param cr: the database cursor.
+    :param source_model: the model that will be merged (and then deleted).
+    :param target_model: the model into where to merge the source one (and its records).
+    :param copy_fields: an iterable of field names, or 2-tuples (source_field, target_field),
+        or a mix of the two, of the fields/columns that will be copied from the
+        source model's table to the target one.
+    :param set_values: a mapping of field names (on the target model) to values that
+        will be set on the new records copied from the source model's table.
+    """
+    set_values = set_values or {}
+
+    source_table = util.table_of_model(cr, source_model)
+    target_table = util.table_of_model(cr, target_model)
+
+    query_cols_map = {}
+    for field_spec in copy_fields:
+        if isinstance(field_spec, str):
+            field_src = field_dest = field_spec
+        elif isinstance(field_spec, (list, tuple)):
+            field_src, field_dest = tuple(field_spec)
+        else:
+            raise ValueError("Invalid value for field name.")
+
+        if not util.column_exists(cr, target_table, field_dest):
+            column_type = util.column_type(cr, source_table, field_src)
+            util.create_column(cr, target_table, field_dest, column_type)
+
+        query_cols_map[field_dest] = field_src
+
+    query_cols_map.update(dict.fromkeys(set_values.keys(), "%s"))
+
+    old_id_column = f"_{source_table}_id"
+    util.create_column(cr, target_table, old_id_column, "int4")
+
+    insert_names = ", ".join(query_cols_map.keys())
+    select_names = ", ".join(query_cols_map.values())
+    cr.execute(
+        f"""
+        INSERT INTO {target_table} ({old_id_column}, {insert_names})
+             SELECT id, {select_names}
+               FROM {source_table}
+          RETURNING {old_id_column}, id
+        """,
+        list(set_values.values())
+    )
+    id_map = dict(cr.fetchall())
+    if id_map:
+        util.replace_record_references_batch(cr, id_map, source_model, target_model)
+
+    util.remove_column(cr, target_table, old_id_column)
+
+    util.merge_model(cr, source_model, target_model)
 
 
 def _merge_modules(cr, src_modules, dest_module):
