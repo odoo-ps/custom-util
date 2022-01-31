@@ -593,7 +593,9 @@ class MoveElements(XPathOperation):
     def _prune_empty(self, element):
         """Remove the given element if empty and recursively its ancestors"""
         parent_el = element.getparent()
-        if parent_el and not len(element) and not element.text.strip():
+        is_root = parent_el is None or not len(parent_el)
+        element_is_empty = not len(element) and not element.text.strip()
+        if not is_root and element_is_empty:
             parent_el.remove(element)
             self._prune_empty(parent_el)
 
