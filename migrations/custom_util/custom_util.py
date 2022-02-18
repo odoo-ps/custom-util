@@ -754,50 +754,84 @@ def get_ids(cr, ids_or_xmlids=None, *more_ids_or_xmlids, model, ids=None, xmlids
     return ids
 
 
-def migrate_invoice_move_data(cr, fields, overwrite=False):
+def migrate_invoice_move_data(cr, fields=None, lines_fields=None, overwrite=False):
     """
-    Migrate ``account.invoice`` fields data over to ``account.move``.
+    Migrate ``account.invoice`` fields data over to ``account.move``,
+    and/or ``account.invoice.line`` fields data over to ``account.move.line``,
     Useful to fix lost data due to accountpocalypse (Odoo 12->13).
-    All columns/fields must already exist, so use this in a ``post-`` script.
+    All columns/fields must already exist, so consider using this in a ``post-`` script.
 
     :param cr: the database cursor object
     :param fields: an iterable of field names `str` or 2-tuples, where the first element
         of the tuple is the name of the source field in ``account.invoice`` and the
         second element is the name of the destination field in ``account.move``.
-    :param overwrite: if set to `True` will overwrites existing values in ``account.move``
-        with the ones from ``account.invoice``, otherwise will preserve any data
-        that already exists in ``account.move`` columns, writing only missing values.
+    :param lines_fields: an iterable of field names `str` or 2-tuples, where the first element
+        of the tuple is the name of the source field in ``account.invoice.line`` and the
+        second element is the name of the destination field in ``account.move.line``.
+    :param overwrite: if set to `True` will overwrites existing values in the destination
+        record (move) with the ones from the source one (invoice), otherwise will preserve
+        any data that already exists in the destination, writing only missing values.
         Defaults to `False`.
+    :raise AttributeError: if none of ``fields`` and ``lines_fields`` are passed.
     """
-    set_stmts = []
-    where_not_null = []
-    for field_spec in fields:
-        if isinstance(field_spec, str):
-            invoice_field = move_field = field_spec
-        elif isinstance(field_spec, (tuple, list)) and len(field_spec) == 2:
-            invoice_field, move_field = field_spec
-        else:
-            raise ValueError(f"Field must be a string or a 2-tuple, got: {field_spec}")
+    if not fields and not lines_fields:
+        raise AttributeError('Must provide one or both of "fields", "lines_fields"')
+    if not fields:
+        fields = []
+    if not lines_fields:
+        lines_fields = []
 
-        set_stmts.append(
-            f"{move_field} = "
-            + (
-                f"ai.{invoice_field}"
-                if overwrite
-                else f"COALESCE(am.{move_field}, ai.{invoice_field})"
+    def prepare_statements(field_specs, move_alias, invoice_alias):
+        set_stmts = []
+        where_not_null = []
+        for field_spec in field_specs:
+            if isinstance(field_spec, str):
+                invoice_field = move_field = field_spec
+            elif isinstance(field_spec, (tuple, list)) and len(field_spec) == 2:
+                invoice_field, move_field = field_spec
+            else:
+                raise ValueError(
+                    f"Field must be a string or a 2-tuple, got: {field_spec}"
+                )
+
+            set_stmts.append(
+                f"{move_field} = "
+                + (
+                    f"{invoice_alias}.{invoice_field}"
+                    if overwrite
+                    else f"COALESCE({move_alias}.{move_field}, {invoice_alias}.{invoice_field})"
+                )
             )
-        )
-        where_not_null.append(f"ai.{invoice_field} IS NOT NULL")
+            where_not_null.append(f"{invoice_alias}.{invoice_field} IS NOT NULL")
 
-    cr.execute(
-        f"""
-        UPDATE account_move am
-           SET {", ".join(set_stmts)}
-          FROM account_invoice ai
-         WHERE ai.move_id = am.id
-           AND ({" OR ".join(where_not_null)});
-        """
-    )
+        return set_stmts, where_not_null
+
+    if fields:
+        set_stmts, where_not_null = prepare_statements(fields, "am", "ai")
+        cr.execute(
+            f"""
+            UPDATE account_move am
+               SET {", ".join(set_stmts)}
+              FROM account_invoice ai
+             WHERE ai.move_id = am.id
+               AND ({" OR ".join(where_not_null)})
+            """
+        )
+        _logger.debug(f'Updated {cr.rowcount} "account.move" records')
+
+    if lines_fields:
+        set_stmts, where_not_null = prepare_statements(lines_fields, "aml", "ail")
+        cr.execute(
+            f"""
+            UPDATE account_move_line aml
+               SET {", ".join(set_stmts)}
+              FROM account_invoice_line ail
+              JOIN invl_aml_mapping map ON map.invl_id=ail.id
+             WHERE aml.id = map.aml_id
+               AND ({" OR ".join(where_not_null)})
+            """
+        )
+        _logger.debug(f'Updated {cr.rowcount} "account.move.line" records')
 
 
 def get_migscript_module():
