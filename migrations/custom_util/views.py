@@ -18,6 +18,8 @@ from .custom_util import get_ids
 __all__ = [
     "get_views_ids",
     "edit_views",
+    "keys_to_ids",
+    "edit_website_views",
     "activate_views",
     "indent_tree",
     "ViewOperation",
@@ -68,7 +70,7 @@ def get_views_ids(cr, ids_or_xmlids=None, *more_ids_or_xmlids, ids=None, xmlids=
     )
 
 
-def edit_views(cr, view_operations, verbose=True):
+def edit_views(cr, view_operations, verbose=True, update_arch=True):
     """
     Utility function to edit one or more views with the specified operations.
 
@@ -103,6 +105,7 @@ def edit_views(cr, view_operations, verbose=True):
         }
         edit_views(cr, view_operations)
     """
+    updated_ids = set()
     for view_id_or_xmlid, operations in view_operations.items():
         if not operations:  # silently skip views with no operations
             continue
@@ -116,6 +119,49 @@ def edit_views(cr, view_operations, verbose=True):
                 _logger.debug(op)
                 op(arch)
             indent_tree(arch)
+        updated_ids.add(view_id)
+    if update_arch:
+        cr.execute("UPDATE ir_ui_view SET arch_updated = TRUE WHERE id IN %s", [tuple(updated_ids)])
+
+
+def keys_to_ids(cr, keys, website_id=None):
+    """
+    Associate ``key``s for website views to their ``id``s, for a specific website_id, or any website.
+
+    N.B. does not support multiple websites at once: in that case you'd want to specify ``website_id``.
+
+    :param cr: the database cursor.
+    :param keys: an iterable of website views keys.
+    :param website_id: the website_id for which to match the views.
+        Defaults to `None`, which will match any non-NULL website.
+    :return: a mapping of keys to ids.
+    :raise ValueError: if the number of ids returned by the query is different than the number of keys provided.
+    """
+    website_clause = "website_id = %(website_id)s" if website_id else "website_id IS NOT NULL"
+    query_params = {"keys": tuple(keys), "website_id": website_id}
+    cr.execute(f"SELECT key, id FROM ir_ui_view WHERE key IN %(keys)s AND {website_clause}", query_params)
+    views_key_id = cr.fetchall()
+    if len(views_key_id) != len(keys):
+        raise ValueError(f"Expected {len(keys)} views got {len(views_key_id)}")
+    return {vals[0]: vals[1] for vals in views_key_id}
+
+def edit_website_views(cr, view_operations, website_id=None, verbose=True):
+    """
+    Edit one or more website views with the specified operations.
+
+    This is a wrapper of :func:`edit_views` that expects website views ``key``s as keys for the ``view_operations`` dict.
+
+    :param cr: the database cursor.
+    :param view_operations: a mapping of website views keys to a sequence of operations to apply
+        to the corresponding view.
+    :param website_id: the website_id for which to match the views.
+        Defaults to `None`, which will match any non-NULL website.
+        If the db is multi-website, you'd want to explicitly provide this argument.
+    :param verbose: same as :func:`edit_views` ``verbose`` argument.
+    """
+    views = keys_to_ids(cr, list(view_operations.keys()), website_id)
+    view_operations = {value: view_operations[key] for key, value in views.items()}
+    edit_views(cr, view_operations, verbose, update_arch=True)
 
 
 def activate_views(cr, ids_or_xmlids=None, *more_ids_or_xmlids, ids=None, xmlids=None):
@@ -140,7 +186,7 @@ def activate_views(cr, ids_or_xmlids=None, *more_ids_or_xmlids, ids=None, xmlids
 
     cr.execute(
         """
-        UPDATE ir_ui_view SET active = TRUE 
+        UPDATE ir_ui_view SET active = TRUE
         WHERE id IN %s
         AND active = FALSE
         RETURNING id;
