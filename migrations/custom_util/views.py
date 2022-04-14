@@ -18,7 +18,8 @@ from .custom_util import get_ids
 __all__ = [
     "get_views_ids",
     "edit_views",
-    "keys_to_ids",
+    "create_cow_view",
+    "get_website_views_ids",
     "edit_website_views",
     "activate_views",
     "indent_tree",
@@ -124,43 +125,113 @@ def edit_views(cr, view_operations, verbose=True, update_arch=True):
         cr.execute("UPDATE ir_ui_view SET arch_updated = TRUE WHERE id IN %s", [tuple(updated_ids)])
 
 
-def keys_to_ids(cr, keys, website_id=None):
+def create_cow_view(cr, key, website_id):
     """
-    Associate ``key``s for website views to their ``id``s, for a specific website_id, or any website.
+    Creates a COWed view from the "template" one for the given website and returns its id.
+    If a COWed view already exists, its id will be returned instead.
 
-    N.B. does not support multiple websites at once: in that case you'd want to specify ``website_id``.
+    :param cr: the database cursor.
+    :param key: the key of the view.
+    :param website_id: the website id where to create/return the COWed view.
+    :return: the id of the COWed view.
+    :raise RuntimeError: if the "website" module is not yet loaded in the ORM/registry.
+    :raise KeyError: if no "template" view for the given key is found.
+    """
+    env = util.env(cr)
+    if "website" not in env.registry._init_modules:
+        raise RuntimeError(
+            '"website" module must be already loaded in the registry to use this function'
+        )
+    View = env["ir.ui.view"]
+
+    std_view = View.search([("key", "=", key), ("website_id", "=", False)])
+    if not std_view:
+        raise KeyError(f'No "template" view found with key "{key}" and no "website_id"')
+
+    std_view.with_context(website_id=website_id).write({"key": key})  # COW
+    cow_view = View.search([("key", "=", key), ("website_id", "=", website_id)])
+    assert cow_view, f"cowed view doesn't exist ({key}, {website_id})"
+    return cow_view.id
+
+
+def get_website_views_ids(cr, keys, website_id=None, create_missing=False):
+    """
+    Associate ``key``s for website views to their ``id``s, returning a mapping.
+
+    This can be done for a specific website, or any website, but does not support
+    multiple websites at once: in that case you'd want to specify ``website_id``.
 
     :param cr: the database cursor.
     :param keys: an iterable of website views keys.
     :param website_id: the website_id for which to match the views.
-        Defaults to `None`, which will match any non-NULL website.
+        Defaults to `None`, which will match any non-NULL website_id.
+    :param create_missing: COW-create missing website-specific views from "template" ones.
     :return: a mapping of keys to ids.
-    :raise ValueError: if the number of ids returned by the query is different than the number of keys provided.
+    :raise ValueError: if ``create_missing`` is specified but not ``website_id``,
+        or if, with no ``website_id` specified, the keys match across multiple websites,
+        or if the number of ids matched differs from the number of keys given.
     """
-    website_clause = "website_id = %(website_id)s" if website_id else "website_id IS NOT NULL"
-    query_params = {"keys": tuple(keys), "website_id": website_id}
-    cr.execute(f"SELECT key, id FROM ir_ui_view WHERE key IN %(keys)s AND {website_clause}", query_params)
-    views_key_id = cr.fetchall()
-    if len(views_key_id) != len(keys):
-        raise ValueError(f"Expected {len(keys)} views got {len(views_key_id)}")
-    return {vals[0]: vals[1] for vals in views_key_id}
+    if not website_id and create_missing:
+        raise ValueError('Must specify a "website_id" when using "create_missing"')
 
-def edit_website_views(cr, view_operations, website_id=None, verbose=True):
+    website_clause = "website_id " + (
+        "= %(website_id)s" if website_id else "IS NOT NULL"
+    )
+    query_params = {"keys": tuple(keys), "website_id": website_id}
+    cr.execute(
+        f"""
+        SELECT key, id, website_id
+          FROM ir_ui_view
+         WHERE key IN %(keys)s
+           AND {website_clause}
+        """,
+        query_params,
+    )
+    rows = cr.fetchall()
+    if len(set(w_id for *_, w_id in rows)) > 1:
+        raise ValueError(
+            f'Provided keys match more than one website view! Specify the "website_id"'
+        )
+    keys_ids_map = {key: view_id for key, view_id, _ in rows}
+
+    missing_keys = set(keys) - keys_ids_map.keys()
+    if missing_keys and create_missing:
+        assert website_id
+        keys_ids_map.update(
+            {key: create_cow_view(cr, key, website_id) for key in missing_keys}
+        )
+
+    if len(keys_ids_map) != len(keys):
+        raise ValueError(f"Expected {len(keys)} views got {len(keys_ids_map)}")
+
+    return keys_ids_map
+
+
+def edit_website_views(
+    cr, view_operations, website_id=None, create_missing=False, verbose=True
+):
     """
     Edit one or more website views with the specified operations.
 
-    This is a wrapper of :func:`edit_views` that expects website views ``key``s as keys for the ``view_operations`` dict.
+    This is a wrapper of :func:`edit_views` that expects website views ``key``s
+    as keys for the ``view_operations`` dict.
 
     :param cr: the database cursor.
-    :param view_operations: a mapping of website views keys to a sequence of operations to apply
-        to the corresponding view.
+    :param view_operations: a mapping of website views keys to a sequence of operations
+        to apply to the corresponding view.
     :param website_id: the website_id for which to match the views.
         Defaults to `None`, which will match any non-NULL website.
         If the db is multi-website, you'd want to explicitly provide this argument.
+    :param create_missing: COW-create missing website-specific views from "template" ones.
     :param verbose: same as :func:`edit_views` ``verbose`` argument.
     """
-    views = keys_to_ids(cr, list(view_operations.keys()), website_id)
-    view_operations = {value: view_operations[key] for key, value in views.items()}
+    views = get_website_views_ids(
+        cr,
+        list(view_operations.keys()),
+        website_id=website_id,
+        create_missing=create_missing,
+    )
+    view_operations = {view_id: view_operations[key] for key, view_id in views.items()}
     edit_views(cr, view_operations, verbose, update_arch=True)
 
 
