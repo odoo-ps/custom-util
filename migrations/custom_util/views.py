@@ -22,11 +22,15 @@ __all__ = [
     "get_website_views_ids",
     "edit_website_views",
     "activate_views",
+    "get_arch",
+    "extract_elements",
+    "extract_elements_from_view",
     "indent_tree",
     "ViewOperation",
     "XPathOperation",
     "AddElementPosition",
     "AddElements",
+    "CopyElements",
     "RemoveElements",
     "RemoveFields",
     "AddInvisibleSiblingFields",
@@ -118,7 +122,7 @@ def edit_views(cr, view_operations, verbose=True, update_arch=True):
             )
             for op in operations:
                 _logger.debug(op)
-                op(arch)
+                op(arch, cr)
             indent_tree(arch)
         updated_ids.add(view_id)
     if update_arch:
@@ -273,6 +277,61 @@ def activate_views(cr, ids_or_xmlids=None, *more_ids_or_xmlids, ids=None, xmlids
     return activated_views
 
 
+def get_arch(cr, view):
+    """
+    Get the parsed arch for a view in the database.
+
+    :param cr: the database cursor.
+    :param view: a view id or xmlid.
+    :return: the parsed arch as :class:`etree.ElementTree` xml.
+    :raise ValueError: if the view was not found or its arch is empty.
+    """
+    [view_id] = get_views_ids(cr, view)
+    arch_col = "arch_db" if util.column_exists(cr, "ir_ui_view", "arch_db") else "arch"
+    cr.execute(
+        "SELECT {arch} FROM ir_ui_view WHERE id=%s".format(arch=arch_col),
+        [view_id],
+    )
+    [arch] = cr.fetchone() or [None]
+    if not arch:
+        raise ValueError(f'View "{view}" not found, or has no arch')
+    return etree.fromstring(arch)
+
+
+def extract_elements(arch, xpaths, view_name=None):
+    """
+    Extract the elements in the given xpaths from the provided arch.
+
+    :param arch: a parsed xml as :class:`etree.ElementTree` (eg. a view arch).
+    :param xpaths: one or multiple xpaths used to match and extract the elements.
+    :param view_name: logging-related param to specify an identifier for the view.
+    :return: the extracted elements as str. N.B. because of possibly multiple matched
+        elements, the returned string might not be valid xml unless wrapped in a root tag.
+    :raise ValueError: if the xpaths did not match any elements to extract.
+    """
+    if isinstance(xpaths, str):
+        xpaths = [xpaths]
+
+    extracted_elements = []
+    for xpath in xpaths:
+        for element in arch.xpath(xpath):
+            extracted_elements.append(etree.tostring(element, encoding=str))
+
+    if not extracted_elements:
+        view_name_msg = f"view {view_name}" if view_name else "arch"
+        raise ValueError(f"No elements found in {view_name_msg} with xpaths: {xpaths}")
+
+    return "\n".join(extracted_elements)
+
+
+def extract_elements_from_view(cr, view, xpaths):
+    """
+    Get a view arch and extract elements from it.
+    See :func:`get_arch` and :func:`extract_elements` for more info.
+    """
+    return extract_elements(get_arch(cr, view), xpaths, view_name=view)
+
+
 def indent_tree(elem, level=0):
     """
     Reindents / reformats an xml fragment.
@@ -311,19 +370,20 @@ class ViewOperation(ABC):
     """
 
     @abstractmethod
-    def __call__(self, arch):
+    def __call__(self, arch, cr=None):
         """
         Abstract method with the actual implementation of the logic of the operation.
 
         :param arch: `lxml.etree` representing the architecture of the document.
+        :param cr: the database cursor if needed by the implementation.
         """
 
-    def on(self, arch):
+    def on(self, arch, cr=None):
         """
         Many elegance, much wow: `ViewOperation.on(arch)`.
         Just a more semantically meaningful shortcut for :func:`__call__`.
         """
-        return self(arch)
+        return self(arch, cr)
 
     def __iter__(self):
         # TODO: are we sure we want this?
@@ -423,7 +483,6 @@ class AddElements(XPathOperation):
 
     def __init__(self, xpaths, elements_xml, position=AddElementPosition.INSIDE):
         super().__init__(xpaths)
-        self.elements_xml = dedent(elements_xml)
         if not isinstance(position, AddElementPosition):
             try:
                 position = AddElementPosition[position.upper()]
@@ -433,7 +492,19 @@ class AddElements(XPathOperation):
                     f'{",".join(e.name for e in AddElementPosition)}, got "{position}"'
                 ) from exc
         self.position = position
-        self.elements = self._prepare_elements(elements_xml)
+        if elements_xml:
+            self.elements_xml = elements_xml
+
+    @property
+    def elements_xml(self):
+        """Get the original xml string of the elements being added"""
+        return self._elements_xml
+
+    @elements_xml.setter
+    def elements_xml(self, value):
+        """Set the xml elements being added from a string"""
+        self.elements = self._prepare_elements(value)
+        self._elements_xml = value
 
     @staticmethod
     def _prepare_elements(elements_xml):
@@ -449,7 +520,7 @@ class AddElements(XPathOperation):
             raise ValueError(f"Invalid xml provided: {elements_xml}")
         return elements
 
-    def __call__(self, arch):
+    def __call__(self, arch, cr=None):
         Pos = AddElementPosition  # better readability
         for el in self.get_elements(arch):
             if self.position in (Pos.INSIDE, Pos.BEFORE):
@@ -465,6 +536,43 @@ class AddElements(XPathOperation):
                     el.getparent().remove(el)
 
 
+class CopyElements(AddElements):
+    """
+    Copies elements from other parts of the view, or from another view altogether.
+
+    Examples::
+        CopyElements("//*[@id='source_element']", "//*[@id='dest_element']")
+
+        CopyElements(
+            "//div[@id='footer']",
+            "//div[@id='footer']",
+            from_view="ailouvain_website.footer_default",
+            position="replace",
+        )
+
+    :param source_xpaths: the xpaths to extract the elements from the source view.
+    :param xpaths: the xpaths of the destination elements to add the extracted ones to.
+    :param from_view: if provided, specifies the id or xmlid of the view from which
+        to copy the elements from, otherwise it's the same one of the operation.
+    :param kwargs: additional keyword arguments for :class:`AddElements`.
+        N.B. arguments ``xpaths`` and ``elements_xml`` are already provided.
+    """
+
+    def __init__(self, source_xpaths, xpaths, from_view=None, **kwargs):
+        super().__init__(xpaths, None, **kwargs)
+        self.source_xpaths = source_xpaths
+        self.source_view = from_view
+
+    def __call__(self, arch, cr=None):
+        if self.source_view and not cr:
+            raise RuntimeError("Cannot copy elements from other views without cursor")
+        source_arch = get_arch(cr, self.source_view) if self.source_view else arch
+        self.elements_xml = extract_elements(
+            source_arch, self.source_xpaths, view_name=self.source_view
+        )
+        super().__call__(arch, cr)
+
+
 class RemoveElements(XPathOperation):
     """
     Removes all elements from the view with matching xpaths.
@@ -478,7 +586,7 @@ class RemoveElements(XPathOperation):
         RemoveElements([f"//data/xpath[{i}]" for i in (12, 13, 14)])
     """
 
-    def __call__(self, arch):
+    def __call__(self, arch, cr=None):
         for el in self.get_elements(arch):
             el.getparent().remove(el)
 
@@ -542,7 +650,7 @@ class RenameElements(XPathOperation):
         self.name = name
         self.new_name = new_name
 
-    def __call__(self, arch):
+    def __call__(self, arch, cr=None):
         for el in self.get_elements(arch):
             el.attrib["name"] = self.new_name
 
@@ -585,7 +693,7 @@ class UpdateAttributes(XPathOperation):
             raise AttributeError("Must provide at least one attribute")
         self.attrs_dict = attrs_dict
 
-    def __call__(self, arch):
+    def __call__(self, arch, cr=None):
         for el in self.get_elements(arch):
             for attr_name, new_value in self.attrs_dict.items():
                 if new_value is None:
@@ -658,7 +766,7 @@ class ReplaceValue(XPathOperation):
                 ) from exc
         self.position = position
 
-    def __call__(self, arch):
+    def __call__(self, arch, cr=None):
         def match_and_replace(pattern, repl, value):
             """
             Tries to replace `value` with `repl` if it matches `pattern`.
@@ -716,7 +824,7 @@ class MoveElements(XPathOperation):
             parent_el.remove(element)
             self._prune_empty(parent_el)
 
-    def __call__(self, arch):
+    def __call__(self, arch, cr=None):
         [dest_el] = self.destination(arch)
         for el in self.get_elements(arch):
             parent_el = el.getparent()
