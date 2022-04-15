@@ -30,6 +30,7 @@ __all__ = [
     "XPathOperation",
     "AddElementPosition",
     "AddElements",
+    "AddElementsFromFile",
     "CopyElements",
     "RemoveElements",
     "RemoveFields",
@@ -534,6 +535,34 @@ class AddElements(XPathOperation):
                     el.addnext(new_el)
                 if self.position is Pos.REPLACE:
                     el.getparent().remove(el)
+
+
+class AddElementsFromFile(AddElements):
+    r"""
+    Adds new elements to the view at the matched xpath nodes, loading them from
+    an external xml file, optionally picking only some elements from it.
+
+    Examples::
+        AddElementsFromFile(
+            \"""//xpath[contains(@expr, "@id='footer'")]\""",
+            osp.normpath(osp.join(osp.dirname(__file__), "footer.xml")),
+            position="replace",
+        )
+
+    :param xpaths: an xpath `str` or an iterable of xpaths.
+        See :class:`XPathOperation` for additional info about this argument.
+    :param filename: the xml file from which to load the new elements.
+    :param source_xpaths: an xpath specifying the nodes to extract from the loaded xml
+        that will be added to the view being processed. Defaults to the root tag.
+    :param kwargs: additional keyword arguments for :class:`AddElements`.
+        N.B. arguments ``xpaths`` and ``elements_xml`` are already provided.
+    """
+
+    def __init__(self, xpaths, filename, source_xpaths="/*", **kwargs):
+        with open(filename, "rb") as fp:
+            arch = etree.fromstring(fp.read())
+        elements_xml = extract_elements(arch, source_xpaths, view_name=filename)
+        super().__init__(xpaths, elements_xml, **kwargs)
 
 
 class CopyElements(AddElements):
