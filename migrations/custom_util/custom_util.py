@@ -438,6 +438,7 @@ def _uninstall_modules(cr, modules):
         util.remove_module(cr, module)
 
 
+# TODO: kept for backwards compatibility, maybe just remove?
 def _rename_xmlid(cr, values_or_xmlid, module):
     """
     """
@@ -490,7 +491,10 @@ def _rename_xmlid(cr, values_or_xmlid, module):
 
     modules_to_check = (dest_module, src_module) if dest_module != src_module else (src_module,)
     if not util.modules_installed(cr, *modules_to_check):
-        _logger.error('Skipping renaming %s ⟹ %s because some of the modules (%s, %s) do not exist' % (name, new_name, src_module, dest_module))
+        _logger.error(
+            f"Skipping renaming {name} => {new_name} because some of the modules "
+            f"({src_module}, {dest_module}) are not installed or do not exist"
+        )
         return
 
     old_xmlid = '%s.%s' % (src_module, name)
@@ -505,29 +509,39 @@ def _rename_xmlid(cr, values_or_xmlid, module):
         noupdate=noupdate
     )
 
-# TODO merge/alias w/ _rename_xmlid (abk: yes; msc: no)?
-def rename_xmlids(cr, pairs, detect_module=True, noupdate=False):
-    """
-    Rename a batch of views/xmlids
-    """
-    if detect_module:
-        module = get_migscript_module()
-        pairsplit = lambda pair: [(module, name) for name in pair]
-    else:
-        pairsplit = lambda pair: [xmlid.split('.') for xmlid in pair]
 
-    kwargs = {"noupdate": noupdate}
-    for pair in pairs:
+def rename_xmlids(cr, pairs, detect_module=True, noupdate=None):
+    """Rename a batch of xmlids"""
+
+    def process_xmlid(xmlid):
+        nonlocal default_module
+        if isinstance(xmlid, (list, tuple)) and len(xmlid) == 2:
+            return tuple(xmlid)
+        elif isinstance(xmlid, str):
+            if "." not in xmlid:
+                if default_module:
+                    return default_module, xmlid
+            else:
+                return xmlid.split(".")
+        raise ValueError(f"Bad xmlid: {xmlid}")
+
+    default_module = get_migscript_module() if detect_module else None
+
+    for old_xmlid_raw, new_xmlid_raw in pairs:
         try:
-            (old_module, old_name), (new_module, new_name) = pairsplit(pair)
-        except ValueError:
-            _logger.error(f"Skipping {pair}. Please use fully qualified xmlid or name and module detection")
+            old_module, old_name = process_xmlid(old_xmlid_raw)
+            new_module, new_name = process_xmlid(new_xmlid_raw)
+        except ValueError as exc:
+            _logger.error(
+                f"Skipping xmlid rename {old_xmlid_raw} => {new_xmlid_raw}: {exc}"
+            )
             continue
 
-        kwargs.update({'new_name': new_name})
-        values = (old_module, new_module, old_name, kwargs)
+        old_xmlid = f"{old_module}.{old_name}"
+        new_xmlid = f"{new_module}.{new_name}"
 
-        _rename_xmlid(cr, values, None)
+        _logger.debug(f"Renaming xmlid {old_xmlid} => {new_xmlid}")
+        util.rename_xmlid(cr, old_xmlid, new_xmlid, noupdate=noupdate)
 
 
 def _check_models(cr, old, new):
