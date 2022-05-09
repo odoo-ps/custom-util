@@ -5,6 +5,7 @@ import os
 import re
 import inspect
 import pathlib
+import warnings
 from typing import Collection
 
 from odoo.upgrade import util
@@ -157,6 +158,8 @@ def update_relationships(cr, model, old_id, new_id):
 
     N.B. `reference` and `many2one_reference` are not handled.
     """
+    # TODO: kept for backwards-compatibility, just remove?
+    warnings.warn("Use `util.replace_record_references` instead", DeprecationWarning)
     cr.execute(
         """
         SELECT name, model, ttype, relation_table, column1, column2
