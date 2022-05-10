@@ -12,7 +12,7 @@ from lxml import etree
 
 from odoo.upgrade import util
 
-from .custom_util import get_ids
+from .helpers import get_ids
 
 
 __all__ = [
