@@ -199,12 +199,40 @@ def get_website_views_ids(cr, keys, website_id=None, create_missing=False):
         )
     keys_ids_map = {key: view_id for key, view_id, _ in rows}
 
-    missing_keys = set(keys) - keys_ids_map.keys()
+    missing_keys = list(set(keys) - keys_ids_map.keys())
+
     if missing_keys and create_missing:
         assert website_id
-        keys_ids_map.update(
-            {key: create_cow_view(cr, key, website_id) for key in missing_keys}
+        # Ensure keys are ordered such that parents are before their children.
+        # Avoids children being copied and deleted when a parent is COWed 
+        cr.execute(
+            """
+            WITH RECURSIVE __parent_store_compute(id, parent_path) AS (
+                SELECT row.id, row.id || '/'
+                  FROM ir_ui_view row
+                 WHERE row.inherit_id IS NULL
+            UNION
+                SELECT row.id, comp.parent_path || row.id || '/'
+                  FROM ir_ui_view row, __parent_store_compute comp
+                 WHERE row.inherit_id = comp.id
+            )
+               SELECT iuv.key
+                 FROM ir_ui_view iuv
+            LEFT JOIN __parent_store_compute comp ON iuv.id = comp.id
+                WHERE key IN %s
+                  AND iuv.website_id IS NULL
+             ORDER BY comp.parent_path
+            """,
+            (tuple(missing_keys),)
         )
+        sorted_missing_keys = [key for [key] in cr.fetchall()]
+
+        # All `missing_keys` should be present in `sorted_missing_keys`,
+        # otherwise trying to edit a non-existent key would fail silently
+        sorted_missing_keys.extend(set(missing_keys) - set(sorted_missing_keys))
+
+        keys_ids_map.update({key: create_cow_view(cr, key, website_id) for key in sorted_missing_keys})
+
 
     if len(keys_ids_map) != len(keys):
         raise ValueError(f"Expected {len(keys)} views got {len(keys_ids_map)}")
