@@ -1,7 +1,13 @@
+#!/usr/bin/env python3
+
 import re
+import sys
 from contextlib import contextmanager
 
 import lxml.etree as etree
+
+
+# TODO: also handle qweb-specific t-att(f)- attributes?
 
 
 def innerxml(element):
@@ -353,3 +359,22 @@ def convert_xml(xml):
                     if element is None:  # previous operations that returned None (ie. deleted element)
                         raise ValueError("Matched xml element is not available anymore! Check operations.")
                     element = operation.on(element)
+
+
+def convert_arch(arch, is_html=False):
+    arch = f"<data>{arch}</data>"
+    xml = etree.fromstring(arch, parser=etree.HTMLParser() if is_html else None)
+    convert_xml(xml)
+    return "\n".join(
+        etree.tostring(child, encoding="unicode", with_tail=True, method="html" if is_html else None) for child in xml
+    )
+
+
+def convert_file(path):
+    xml = etree.parse(path)
+    convert_xml(xml)
+    xml.write(path, encoding="utf-8", xml_declaration=True)
+
+
+if __name__ == "__main__":
+    convert_file(sys.argv[1])
