@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import os.path
 import re
 import sys
 from contextlib import contextmanager
@@ -10,8 +11,10 @@ import lxml.etree as etree
 # TODO: also handle qweb-specific t-att(f)- attributes?
 
 
-def innerxml(element):
-    return (element.text or "") + "".join(etree.tostring(child, encoding=str) for child in element)
+def innerxml(element, is_html=False):
+    return (element.text or "") + "".join(
+        etree.tostring(child, encoding=str, method="html" if is_html else None) for child in element
+    )
 
 
 def split_classes(class_attr):
@@ -37,45 +40,7 @@ def edit_classes(element):
     set_classes(element, classes)
 
 
-def build_element(tag, classes=None, contents=None, **attributes):
-    element = etree.XML(f"<{tag}>{contents or ''}</{tag}>")
-    if classes:
-        set_classes(element, classes)
-    for name, value in attributes.items():
-        element.attrib[name] = value
-    return element
-
-
 ALL = object()
-
-
-def copy_element(element, tag=None, add_classes=None, remove_classes=None, copy_attrs=True, **attributes):
-    tag = tag or element.tag
-
-    if remove_classes is ALL:
-        classes = []
-        remove_classes = None
-    else:
-        classes = get_classes(element)
-
-    if isinstance(add_classes, str):
-        add_classes = [add_classes]
-    for classname in add_classes or []:
-        if classname not in classes:
-            classes.append(classname)
-
-    if isinstance(remove_classes, str):
-        remove_classes = [remove_classes]
-    for classname in remove_classes or []:
-        if classname in classes:
-            classes.remove(classname)
-
-    contents = innerxml(element)
-
-    if copy_attrs:
-        attributes.update(element.attrib)
-
-    return build_element(tag, classes=classes, contents=contents, **attributes)
 
 
 def simple_css_selector_to_xpath(selector):
@@ -101,38 +66,38 @@ def simple_css_selector_to_xpath(selector):
 C = simple_css_selector_to_xpath
 
 
-class XmlOperation:
-    def __call__(self, element):
+class ElementOperation:
+    def __call__(self, element, converter):
         raise NotImplementedError
 
-    def on(self, element):
-        return self(element)
+    def on(self, element, converter):
+        return self(element, converter)
 
 
-class AddClass(XmlOperation):
+class AddClass(ElementOperation):
     def __init__(self, classname):
         self.classname = classname
 
-    def __call__(self, element):
+    def __call__(self, element, converter):
         with edit_classes(element) as classes:
             if self.classname not in classes:
                 classes.append(self.classname)
         return element
 
 
-class RemoveClass(XmlOperation):
+class RemoveClass(ElementOperation):
     def __init__(self, classname):
         self.classname = classname
 
-    def __call__(self, element):
+    def __call__(self, element, converter):
         with edit_classes(element) as classes:
             if self.classname in classes:
                 classes.remove(self.classname)
         return element
 
 
-class PullUp(XmlOperation):
-    def __call__(self, element):
+class PullUp(ElementOperation):
+    def __call__(self, element, converter):
         parent = element.getparent()
         if parent is None:
             raise ValueError(f"Cannot pull up contents of xml element with no parent: {element}")
@@ -147,25 +112,27 @@ class PullUp(XmlOperation):
         return None
 
 
-class ConvertBlockquote(XmlOperation):
-    def __call__(self, element):
-        blockquote = copy_element(element, tag="div", add_classes="blockquote", copy_attrs=False)
+class ConvertBlockquote(ElementOperation):
+    def __call__(self, element, converter):
+        blockquote = converter.copy_element(element, tag="div", add_classes="blockquote", copy_attrs=False)
         element.addnext(blockquote)
         element.getparent().remove(element)
         return blockquote
 
 
-class MakeCard(XmlOperation):
-    def __call__(self, element):
-        card = etree.XML("<div class='card'/>")
-        card_body = copy_element(element, tag="div", add_classes="card-body", remove_classes=ALL, copy_attrs=False)
+class MakeCard(ElementOperation):
+    def __call__(self, element, converter):
+        card = converter.element_factory("<div class='card'/>")
+        card_body = converter.copy_element(
+            element, tag="div", add_classes="card-body", remove_classes=ALL, copy_attrs=False
+        )
         card.append(card_body)
         element.addnext(card)
         element.getparent().remove(element)
         return card
 
 
-class ConvertCard(XmlOperation):
+class ConvertCard(ElementOperation):
     POST_CONVERSIONS = {
         "title": ["card-title"],
         "description": ["card-description"],
@@ -182,7 +149,7 @@ class ConvertCard(XmlOperation):
         "panel": ["card"],
     }
 
-    def _convert_child(self, child, old_card, new_card):
+    def _convert_child(self, child, old_card, new_card, converter):
         old_card_classes = get_classes(old_card)
 
         classes = get_classes(child)
@@ -202,7 +169,13 @@ class ConvertCard(XmlOperation):
         else:
             return  # TODO: just add instead?
 
-        new_child = copy_element(child, "div", add_classes=add_classes, remove_classes=remove_classes, copy_attrs=False)
+        new_child = converter.copy_element(
+            child,
+            "div",
+            add_classes=add_classes,
+            remove_classes=remove_classes,
+            copy_attrs=False,
+        )
 
         if "image" in classes:
             [img_el] = new_child.xpath("./img")[:1] or [None]
@@ -219,7 +192,7 @@ class ConvertCard(XmlOperation):
         if "content" in classes:  # TODO: consider skipping for .card-background
             [footer] = new_child.xpath("./*[contains(@class, 'footer')]")[:1] or [None]
             if footer is not None:
-                self._convert_child(footer, old_card, new_card)
+                self._convert_child(footer, old_card, new_card, converter)
                 new_child.remove(footer)
 
     def _postprocess(self, new_card):
@@ -232,14 +205,14 @@ class ConvertCard(XmlOperation):
                         if new_class not in classes:
                             classes.append(new_class)
 
-    def __call__(self, element):
+    def __call__(self, element, converter):
         classes = get_classes(element)
-        new_card = copy_element(element, tag="div", copy_attrs=False)
+        new_card = converter.copy_element(element, tag="div", copy_attrs=False)
         wrapper = new_card
         if "card-horizontal" in classes:
             wrapper = etree.SubElement(new_card, "div", {"class": "row"})
         for child in element:
-            self._convert_child(child, element, wrapper)
+            self._convert_child(child, element, wrapper, converter)
         self._postprocess(element)
         element.getparent().remove(element)
         return new_card
@@ -326,6 +299,7 @@ NAVBAR_CONVERSIONS = {
     C("button.navbar-toggle"): [AddClass("navbar-expand-md"), RemoveClass("navbar-toggle")],
 }
 CARD_CONVERSIONS = {C(".card"): [ConvertCard()]}
+# TODO: grid offsets: col-(\w+)-offset-(\d+) -> offset-$1-$2
 
 CONVERSIONS = [
     # priority 3
@@ -351,29 +325,84 @@ CONVERSIONS = [
 ]
 
 
-def convert_xml(xml):
-    for conversions_group in CONVERSIONS:
-        for xpath, operations in conversions_group.items():
-            for element in xml.xpath(xpath):
-                for operation in operations:
-                    if element is None:  # previous operations that returned None (ie. deleted element)
-                        raise ValueError("Matched xml element is not available anymore! Check operations.")
-                    element = operation.on(element)
+class BS3to4Converter:
+    def __init__(self, tree, is_html=False):
+        self.tree = tree
+        self.is_html = is_html
+
+    def convert(self):
+        for conversions_group in CONVERSIONS:
+            for xpath, operations in conversions_group.items():
+                for element in self.tree.xpath(xpath):
+                    for operation in operations:
+                        if element is None:  # previous operations that returned None (ie. deleted element)
+                            raise ValueError("Matched xml element is not available anymore! Check operations.")
+                        element = operation.on(element, self)
+        return self.tree
+
+    @classmethod
+    def convert_arch(cls, arch, is_html=False):
+        arch = f"<data>{arch}</data>"
+        tree = etree.fromstring(arch, parser=etree.HTMLParser() if is_html else None)
+        tree = cls(tree, is_html).convert()
+        return "\n".join(
+            etree.tostring(child, encoding="unicode", with_tail=True, method="html" if is_html else None)
+            for child in tree
+        )
+
+    @classmethod
+    def convert_file(cls, path):
+        is_html = os.path.splitext(path)[1].startswith("htm")
+        tree = etree.parse(path, parser=etree.HTMLParser() if is_html else None)
+        tree = cls(tree, is_html).convert()
+        tree.write(path, encoding="utf-8", method="html" if is_html else None, xml_declaration=not is_html)
+
+    def element_factory(self, *args, **kwargs):
+        return etree.HTML(*args, **kwargs) if self.is_html else etree.XML(*args, **kwargs)
+
+    def build_element(self, tag, classes=None, contents=None, **attributes):
+        element = self.element_factory(f"<{tag}>{contents or ''}</{tag}>")
+        if classes:
+            set_classes(element, classes)
+        for name, value in attributes.items():
+            element.attrib[name] = value
+        return element
+
+    def copy_element(self, element, tag=None, add_classes=None, remove_classes=None, copy_attrs=True, **attributes):
+        tag = tag or element.tag
+
+        if remove_classes is ALL:
+            classes = []
+            remove_classes = None
+        else:
+            classes = get_classes(element)
+
+        if isinstance(add_classes, str):
+            add_classes = [add_classes]
+        for classname in add_classes or []:
+            if classname not in classes:
+                classes.append(classname)
+
+        if isinstance(remove_classes, str):
+            remove_classes = [remove_classes]
+        for classname in remove_classes or []:
+            if classname in classes:
+                classes.remove(classname)
+
+        contents = innerxml(element, is_html=self.is_html)
+
+        if copy_attrs:
+            attributes.update(element.attrib)
+
+        return self.build_element(tag, classes=classes, contents=contents, **attributes)
 
 
-def convert_arch(arch, is_html=False):
-    arch = f"<data>{arch}</data>"
-    xml = etree.fromstring(arch, parser=etree.HTMLParser() if is_html else None)
-    convert_xml(xml)
-    return "\n".join(
-        etree.tostring(child, encoding="unicode", with_tail=True, method="html" if is_html else None) for child in xml
-    )
+def convert_tree(tree, is_html=False):
+    return BS3to4Converter(tree, is_html).convert()
 
 
-def convert_file(path):
-    xml = etree.parse(path)
-    convert_xml(xml)
-    xml.write(path, encoding="utf-8", xml_declaration=True)
+convert_arch = BS3to4Converter.convert_arch
+convert_file = BS3to4Converter.convert_file
 
 
 if __name__ == "__main__":
