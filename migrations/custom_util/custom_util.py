@@ -38,7 +38,8 @@ __all__ = [
     "_upgrade_custom_models",
     "_upgrade_standard_models",
     "migrate_invoice_move_data",
-    "get_migscript_module"
+    "get_migscript_module",
+    "set_not_imported_modules",
 ]
 
 
@@ -783,3 +784,30 @@ def get_migscript_module():
             path = pathlib.PurePath(frame.filename)
             return path.parts[-4]
     raise RuntimeError("Could not automatically determine calling migration script module name")
+
+
+def set_not_imported_modules(cr, modules):
+    """
+    Set custom SAAS modules as not imported for the Odoo CLOC to take them into account
+    for invoicing the customer for their developments.
+
+    Examples::
+        set_not_imported_modules(cr, "custom_module")
+        set_not_imported_modules(cr, list_of_module_names)
+        set_not_imported_modules(cr, ["custom_module_1", "custom_module_2])
+
+    :param modules: a name or list of module names to update
+    :raise AttributeError: if no module name (``modules``) is passed
+    """
+    if not modules:
+        raise AttributeError("Must provide at least one module name to update")
+    elif isinstance(modules, str):
+        modules = [modules]
+    cr.execute(
+        """
+        UPDATE ir_module_module
+           SET imported = FALSE
+         WHERE name IN %s
+    """,
+        [tuple(modules), ],
+    )
