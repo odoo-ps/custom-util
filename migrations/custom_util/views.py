@@ -5,8 +5,9 @@ and other xml documents in a database.
 import enum
 import logging
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from textwrap import dedent
-from typing import Pattern
+from typing import Pattern, Collection, Sequence
 
 from lxml import etree
 
@@ -16,8 +17,11 @@ from .helpers import get_ids
 
 
 __all__ = [
+    "WebsiteId",
+    "ViewKey",
     "get_views_ids",
     "edit_views",
+    "create_cow_views",
     "create_cow_view",
     "get_website_views_ids",
     "edit_website_views",
@@ -48,43 +52,266 @@ __all__ = [
 _logger = logging.getLogger(__name__)
 
 
-def get_views_ids(cr, ids_or_xmlids=None, *more_ids_or_xmlids, ids=None, xmlids=None):
+class WebsiteId(enum.Enum):
+    """Enums for representing special values for views ``website_id``"""
+
+    NOTSET = "NOTSET"
+    NOTNULL = "NOTNULL"
+
+
+class ViewKey:
+    """
+    Class that represents references to views by their key and website_id, and provides utility methods to convert
+    the references to the views ids.
+
+    :param key: the view key.
+    :type key: str
+    :param website_id: the ``website_id`` associated with the view key. Use `WebsiteId.NOTSET` to match
+        any ``website_id``, `WebsiteId.NOTNULL` to match any ``website_id`` that is an integer id,
+        or `None` to match views with no ``website_id`` (ie. "template views" not associated to any website).
+        Defaults to `WebsiteId.NOTSET`.
+    :type website_id: int | WebsiteId | None
+    """
+
+    def __init__(self, key, website_id=WebsiteId.NOTSET):
+        self.key = key
+        self.website_id = website_id
+
+    @classmethod
+    def get_all_ids(cls, cr, keys, must_exist=False, same_website=False):
+        """
+        Batch-dereference a bunch of instances to the matching view ids in the databasee.
+
+        :param cr: the database cursor.
+        :type cr: psycopg2.cursor
+        :param keys: the :class:`ViewKey`s to dereference.
+        :type keys: ViewKey | typing.Iterable[ViewKey]
+        :param must_exist: if True, check that all the instances match an existing view in the database.
+        :type must_exist: bool
+        :param same_website: if True, check that all matched views belong to the same website.
+        :type same_website: bool
+        :return: a mapping of :class:`ViewKey`s to the matched view `ids` in the database.
+        :rtype: typing.MutableMapping[ViewKey, typing.Set[int]]
+        """
+        if isinstance(keys, ViewKey):
+            keys = [keys]
+
+        cls_name = ViewKey.__name__
+
+        # SQL NULL is not comparable (ie. `NULL = NULL` => NULL, not TRUE), and there's
+        # no value that always compares to TRUE, so we need 3 separate WHERE clauses
+        where_clauses = defaultdict(list)
+        for view_key in keys:
+            if not isinstance(view_key, ViewKey):
+                raise TypeError(f"`keys` must be instances of {cls_name}")
+            elif isinstance(view_key.website_id, int):
+                where_clauses["(key, website_id) IN %s"].append((view_key.key, view_key.website_id))
+            elif view_key.website_id is None:
+                where_clauses["(key IN %s AND website_id IS NULL)"].append(view_key.key)
+            elif view_key.website_id is WebsiteId.NOTNULL:
+                where_clauses["(key IN %s AND website_id IS NOT NULL)"].append(view_key.key)
+            elif view_key.website_id is WebsiteId.NOTSET:
+                where_clauses["key IN %s"].append(view_key.key)
+            else:
+                raise ValueError(f"Unhandled `{cls_name}.website_id` value: {view_key}")
+
+        cr.execute(
+            f"SELECT id, key, website_id FROM ir_ui_view WHERE {' OR '.join(where_clauses.keys())}",
+            tuple(tuple(l) for l in where_clauses.values()),
+        )
+        res_by_id = {id_: (key, website_id) for id_, key, website_id in cr.fetchall()}
+        ids_by_key = {vk: set(id_ for id_, (view_key, website_id) in res_by_id.items() if vk.matches(view_key, website_id)) for vk in keys}
+
+        unmatched_ids = res_by_id.keys() - set(id_ for ids in ids_by_key.values() for id_ in ids)
+        assert not unmatched_ids, f"Query returned ids that don't match any {cls_name}: {unmatched_ids}"
+
+        keys_by_website = {
+            website_id: set(vk for vk, ids in ids_by_key.items() if id_ in ids)
+            for id_, (_, website_id) in res_by_id.items()
+        }
+        for view_key in keys:  # sanity check
+            if not isinstance(view_key.website_id, int):
+                continue
+            matching_websites = {website_id for website_id, vkeys in keys_by_website.items() if view_key in vkeys}
+            assert len(matching_websites) <= 1, f"{view_key} matches more than one website: {matching_websites}"
+
+        if same_website and len(keys_by_website) > 1:
+            raise ValueError(f"Matched views for the specified keys on multiple websites: {keys_by_website}")
+
+        if must_exist:
+            missing = [vk for vk, ids in ids_by_key.items() if not ids]
+            if missing:
+                raise KeyError(f"Some {cls_name} did not match in the db: {missing}")
+
+        return ids_by_key
+
+    def get_ids(self, cr, **kwargs):
+        """
+        Dereference the instance to the matching view ids in the database.
+
+        :param cr: the database cursor.
+        :type cr: psycopg2.cursor
+        :param kwargs: additional keyword arguments for :meth:`~.get_all_ids`.
+        :type kwargs: any
+        :return: the matched ids for the instance.
+        :rtype: typing.Set[int]
+        """
+        (ids,) = self.get_all_ids(cr, self, **kwargs).values()
+        return ids
+
+    def __hash__(self):
+        return hash((self.__class__, self.key, self.website_id))
+
+    def matches(self, key, website_id):
+        """
+        Check if the instance matches a specific key, website_id pair
+
+        :param key: the ``key`` value to match against.
+        :type key: str
+        :param website_id: the ``website_id`` value to match against.
+        :type website_id: int | None
+        :return: True if the values match the instance, False otherwise.
+        :rtype: bool
+        """
+        if self.website_id is None or isinstance(self.website_id, int):
+            return self == ViewKey(key, website_id)
+        elif self.website_id is WebsiteId.NOTNULL:
+            return key == self.key and self.website_id is not None
+        elif self.website_id is WebsiteId.NOTSET:
+            return key == self.key
+        return False
+
+    def __eq__(self, other):
+        if isinstance(other, ViewKey):
+            return (other.key, other.website_id) == (self.key, self.website_id)
+        elif isinstance(other, Sequence) and len(other) == 2:
+            return self.matches(*other)
+        return False
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}({repr(self.key)}, {repr(self.website_id)})"
+
+
+def get_views_ids(
+    cr,
+    views=None,
+    *more_views,
+    ids=None,
+    xmlids=None,
+    keys=None,
+    website_id=WebsiteId.NOTSET,
+    create_missing_cows=False,
+    ensure_exist=True,
+    mapped=False,
+):
     """
     Get views ids from the given arguments.
 
-    The function accepts xmlids and ids arguments in a variety of ways; these can be
+    The function accepts xmlids, ids and keys arguments in a variety of ways; these can be
     freely mixed and will be merged together for the final returned result.
 
     :param cr: the database cursor.
-    :param ids_or_xmlids: an id as `int`, xmlid as `str`, or a collection of these.
-    :param more_ids_or_xmlids: more ids or xmlids provided as positional arguments.
-    :param ids: a id or collection of ids as `int`s. Will be returned together
+    :type cr: psycopg2.cursor
+    :param views: an id as `int`, xmlid as `str`, key as :class:`ViewKey`, or a collection of these.
+    :type views: int | str | ViewKey | typing.Collection[int | str | ViewKey]
+    :param more_views: more ids, xmlids or keys provided as positional arguments.
+    :type more_views: int | str | ViewKey
+    :param ids: an id or collection of ids as `int`s. Will be returned together
         with other fetched ids.
+    :type ids: int | typing.Collection[int]
     :param xmlids: an xmlid or collection of xmlids as `str`s, whose ids will be fetched.
-    :return: a set of `int` ids of views from the specified arguments.
-    :raise ValueError: if one or more of the provided arguments are invalid ids/xmlids.
-    :raise AttributeError: if no ids/xmlids are provided.
+    :type xmlids: str | typing.Collection[str]
+    :param keys: a key or collection of keys as `str` or :class:`ViewKey` instances,
+        that will be dereferenced to the matching ids.
+    :type keys: str | ViewKey | typing.Collection[str | ViewKey]
+    :param website_id: the default ``website_id`` value to use for view keys passed as `str`s that will be converted
+        internally to :class:`ViewKey`.
+    :type website_id: int | WebsiteId | None
+    :param create_missing_cows: COW-create missing website-specific views for the given keys from "template" ones.
+        Defaults to False.
+    :type create_missing_cows: bool
+    :param ensure_exist: if True, check that all the passed values match existing views records in the database.
+        Defaults to True.
+    :type ensure_exist: bool
+    :param mapped: if True, return a mapping of the passed values to matched ids, otherwise a set of all matched ids.
+        Defaults to False.
+    :type mapped: bool
+    :return: the matched view ids for the specified arguments, as dict or set, depending on the ``mapped`` argument.
+    :rtype: typing.Set[int] | typing.MutableMapping[int | str | ViewKey, typing.Set[int]]
+    :raise TypeError: if ``create_missing_cows`` is used with invalid ``website_id``s.
     """
-    # TODO: add ability / special case to grab views by `key`
-    return get_ids(
-        cr,
-        ids_or_xmlids,
-        *more_ids_or_xmlids,
-        model="ir.ui.view",
-        ids=ids,
-        xmlids=xmlids,
-    )
+    view_keys = set()
+
+    def get_view_keys(value, coerce_str=False):
+        nonlocal view_keys
+        if isinstance(value, ViewKey):
+            view_keys.add(value)
+            return None
+        if coerce_str and isinstance(value, str):
+            view_keys.add(ViewKey(key, website_id))
+            return None
+        if isinstance(value, Collection) and not isinstance(value, str):
+            # recurse to add view_keys to set and convert them to None in the iterable
+            value = [get_view_keys(v, coerce_str=coerce_str) for v in value]
+            return [v for v in value if v is not None]
+        return value
+
+    get_view_keys(keys, coerce_str=True)
+    assert not keys, "all keys should have been consumed, otherwise got unhandled types"
+    views = get_view_keys(views)
+    more_views = get_view_keys(more_views)
+
+    if any((views, more_views, ids, xmlids)):
+        result = get_ids(
+            cr, views, *more_views, model="ir.ui.view", ids=ids, xmlids=xmlids, ensure_exist=ensure_exist, mapped=mapped
+        )
+    else:
+        result = {} if mapped else set()
+
+    if view_keys:
+        ids_by_key = ViewKey.get_all_ids(
+            cr, view_keys, same_website=create_missing_cows, must_exist=ensure_exist and not create_missing_cows
+        )
+
+        if create_missing_cows:
+            missing_keys_by_website = defaultdict(set)
+            for view_key, ids in list(ids_by_key.items()):
+                if not ids:
+                    if view_key.website_id in (WebsiteId.NOTNULL, WebsiteId.NOTSET):
+                        if not isinstance(website_id, int):
+                            raise TypeError(f"Tried using `create_missing_cows` without `website_id`: {view_key}")
+                        key_website_id = website_id
+                    elif isinstance(view_key.website_id, int):
+                        key_website_id = view_key.website_id
+                    else:
+                        assert view_key.website_id is None
+                        raise TypeError(f"Cannot use `create_missing_cows` with `website_id=None` in {view_key}")
+                    missing_keys_by_website[key_website_id].add(view_key.key)
+                    ids_by_key.pop(view_key)
+
+            for cow_website_id, missing_keys in missing_keys_by_website.items():
+                for key, cow_id in create_cow_views(cr, missing_keys, cow_website_id).items():
+                    ids_by_key[ViewKey(key, cow_website_id)] = {cow_id}
+
+        if mapped:
+            result.update(ids_by_key)
+        else:
+            result |= {id_ for ids in ids_by_key.values() for id_ in ids}
+
+    return result
 
 
-def edit_views(cr, view_operations, verbose=True, update_arch=True):
+def edit_views(
+    cr, view_operations, verbose=True, update_arch=True, create_missing_cows=False, website_id=WebsiteId.NOTSET
+):
     """
     Utility function to edit one or more views with the specified operations.
 
     It accepts a mapping of operations to be executed on views, with the views
-    identifiers (ids, xmlids) as keys and a sequence of operations as values.
+    identifiers (ids, xmlids, keys) as keys and a sequence of operations as values.
     The operations must be instances of :class:`ViewOperation`.
 
-    Since these are not bound to any specific view, but rather just define an action
+    Since operations are not bound to any specific view, but rather just define an action
     to be taken, they can be defined beforehand in a variable and reused on multiple
     views (eg. when there are common cases to be handled).
 
@@ -108,141 +335,182 @@ def edit_views(cr, view_operations, verbose=True, update_arch=True):
             "odoo_studio_mrp_prod_42bdbf61-e12a-4cd9-a528-9b8504adaa4f": (
                 RemoveFields("date_start_wo"),
             ),
+            ViewKey("website.footer_custom", util.ref(cr, "website.default_website")): (
+                AddElementsFromFile(
+                    \"""//xpath[contains(@expr, "@id='footer'")]\""",
+                    osp.normpath(osp.join(osp.dirname(__file__), "footer.xml")),
+                    position="replace",
+                ),
+            ),
         }
         edit_views(cr, view_operations)
+
+    :param cr: the database cursor.
+    :type cr: psycopg2.cursor
+    :param view_operations: a mapping of views identifiers (ids, xmlids, keys) to sequence of operations to
+        apply to such views.
+    :type view_operations: typing.Mapping[int | str | ViewKey, typing.Sequence[ViewOperation]]
+    :param verbose: if True log each view being modified as INFO, otherwise the log level is set to DEBUG instead.
+        Defaults to True.
+    :type verbose: bool
+    :param update_arch: if True set ``arch_updated`` accordingly on the edited views. This is normally wanted
+        since almost always the views edited through this method are not coming from xml source files and might be
+        ``noupdate`` already (eg. studio views, website COWed views, etc.), so this defaults to True.
+    :type update_arch: bool
+    :param create_missing_cows: COW-create missing website-specific views from "template" ones (applies only
+        to views with :class:`ViewKey` identifiers). Defaults to False.
+    :type create_missing_cows: bool
+    :param website_id: the default ``website_id`` to use for missing COWed views when using ``create_missing_cows``.
+        See also :func:`edit_website_views` for a convenience function to edit COWed website views.
+    :type website_id: int | WebsiteId | None
+    :rtype: None
     """
+    views_ids_map = get_views_ids(
+        cr,
+        view_operations.keys(),
+        ensure_exist=True,
+        mapped=True,
+        website_id=website_id,
+        create_missing_cows=create_missing_cows,
+    )
+
     updated_ids = set()
-    for view_id_or_xmlid, operations in view_operations.items():
+    for id_origin, operations in view_operations.items():
         if not operations:  # silently skip views with no operations
             continue
-        [view_id] = get_views_ids(cr, view_id_or_xmlid)
-        with util.edit_view(cr, view_id=view_id, skip_if_not_noupdate=False) as arch:
-            _logger.log(
-                logging.INFO if verbose else logging.DEBUG,
-                f'Patching ir.ui.view "{view_id_or_xmlid}"',
-            )
-            for op in operations:
-                _logger.debug(op)
-                op(arch, cr)
-            indent_tree(arch)
-        updated_ids.add(view_id)
+        for view_id in views_ids_map[id_origin]:
+            with util.edit_view(cr, view_id=view_id, skip_if_not_noupdate=False) as arch:
+                _logger.log(
+                    logging.INFO if verbose else logging.DEBUG,
+                    f'Patching ir.ui.view "{id_origin}" (id={view_id})',
+                )
+                for op in operations:
+                    _logger.debug(op)
+                    op(arch, cr)
+                indent_tree(arch)
+            updated_ids.add(view_id)
+
     if update_arch:
         cr.execute("UPDATE ir_ui_view SET arch_updated = TRUE WHERE id IN %s", [tuple(updated_ids)])
 
 
-def create_cow_view(cr, key, website_id):
+def create_cow_views(cr, keys, website_id):
+    """
+    Creates COWed views from their "template" ones for the given website and returns their ids.
+    If a COWed view already exists, it will be reused instead.
+
+    :param cr: the database cursor.
+    :type cr: psycopg2.cursor
+    :param keys: the key of the website view to COW.
+    :type keys: str | typing.Sequence[str]
+    :param website_id: the website id where to create the COWed views on.
+    :type website_id: int
+    :return: a mapping of ids to keys for the COWed views.
+    :rtype: typing.MutableMapping[str, int]
+    :raise RuntimeError: if the "website" module is not yet loaded in the ORM/registry.
+    :raise KeyError: if any "template" views for the given keys is not found.
+    """
+    if isinstance(keys, str):
+        keys = [keys]
+
+    # Ensure keys are ordered such that parents are before their children.
+    # Avoids children being copied and deleted when a parent is COWed.
+    # Also filter website_id so that we only match template views for next sanity check.
+    cr.execute(
+        """
+        WITH RECURSIVE parents (id, path) AS (
+            SELECT row.id, row.id::text FROM ir_ui_view row WHERE row.inherit_id IS NULL
+             UNION
+            SELECT row.id, pp.path || '/' || row.id
+              FROM ir_ui_view row, parents pp
+             WHERE row.inherit_id = pp.id
+        )
+           SELECT iuv.key
+             FROM ir_ui_view iuv
+        LEFT JOIN parents p ON iuv.id = p.id
+            WHERE key IN %s AND iuv.website_id IS NULL
+         ORDER BY p.path
+        """,
+        (tuple(keys),),
+    )
+    sorted_keys = [key for [key] in cr.fetchall()]
+    missing_template_keys = set(keys) - set(sorted_keys)
+    if missing_template_keys:
+        raise KeyError(f"Some of the specified keys have no matching view without website_id: {missing_template_keys}")
+
+    env = util.env(cr)
+    if "website" not in env.registry._init_modules:
+        raise RuntimeError('"website" module must be already loaded in the registry to use this function')
+    View = env["ir.ui.view"]
+
+    ids_by_key = {}
+    for key in sorted_keys:
+        std_view = View.search([("key", "=", key), ("website_id", "=", False)])
+        assert std_view, f'No "template" view found with key "{key}" and no "website_id"'
+
+        std_view.with_context(website_id=website_id).write({"key": key})  # COW here
+        cow_view = View.search([("key", "=", key), ("website_id", "=", website_id)])
+        assert cow_view, f"cowed view doesn't exist ({key}, {website_id})"
+
+        ids_by_key[key] = cow_view.id
+
+    return ids_by_key
+
+
+def create_cow_view(cr, key, website_id):  # backward compatibility
     """
     Creates a COWed view from the "template" one for the given website and returns its id.
     If a COWed view already exists, its id will be returned instead.
 
     :param cr: the database cursor.
+    :type cr: psycopg2.cursor
     :param key: the key of the view.
+    :type key: str
     :param website_id: the website id where to create/return the COWed view.
+    :type website_id: int
     :return: the id of the COWed view.
-    :raise RuntimeError: if the "website" module is not yet loaded in the ORM/registry.
-    :raise KeyError: if no "template" view for the given key is found.
+    :rtype: int
     """
-    env = util.env(cr)
-    if "website" not in env.registry._init_modules:
-        raise RuntimeError(
-            '"website" module must be already loaded in the registry to use this function'
-        )
-    View = env["ir.ui.view"]
-
-    std_view = View.search([("key", "=", key), ("website_id", "=", False)])
-    if not std_view:
-        raise KeyError(f'No "template" view found with key "{key}" and no "website_id"')
-
-    std_view.with_context(website_id=website_id).write({"key": key})  # COW
-    cow_view = View.search([("key", "=", key), ("website_id", "=", website_id)])
-    assert cow_view, f"cowed view doesn't exist ({key}, {website_id})"
-    return cow_view.id
+    (cow_id,) = create_cow_views(cr, key, website_id).values()
+    return cow_id
 
 
-def get_website_views_ids(cr, keys, website_id=None, create_missing=False):
+def get_website_views_ids(cr, keys, website_id=WebsiteId.NOTNULL, create_missing=False):
     """
     Associate ``key``s for website views to their ``id``s, returning a mapping.
 
-    This can be done for a specific website, or any website, but does not support
-    multiple websites at once: in that case you'd want to specify ``website_id``.
+    This can be done for a specific website, or any website, but does not support multiple websites at once.
+    Optionally COW-creates missing website-specific views, which requires to explicitly provide the website.
 
     :param cr: the database cursor.
+    :type cr: psycopg2.cursor
     :param keys: an iterable of website views keys.
+    :type keys: typing.Iterable[str]
     :param website_id: the website_id for which to match the views.
-        Defaults to `None`, which will match any non-NULL website_id.
+        Defaults to `WebsiteId.NOTNULL`, which will match any non-NULL website_id.
+    :type website_id: int | WebsiteId | None
     :param create_missing: COW-create missing website-specific views from "template" ones.
+    :type create_missing: bool
     :return: a mapping of keys to ids.
-    :raise ValueError: if ``create_missing`` is specified but not ``website_id``,
-        or if, with no ``website_id` specified, the keys match across multiple websites,
-        or if the number of ids matched differs from the number of keys given.
+    :rtype: typing.MutableMapping[str, int]
+    :raise ValueError: if ``create_missing`` is specified but not ``website_id``.
     """
-    if not website_id and create_missing:
+    if create_missing and not isinstance(website_id, int):
         raise ValueError('Must specify a "website_id" when using "create_missing"')
 
-    website_clause = "website_id " + (
-        "= %(website_id)s" if website_id else "IS NOT NULL"
-    )
-    query_params = {"keys": tuple(keys), "website_id": website_id}
-    cr.execute(
-        f"""
-        SELECT key, id, website_id
-          FROM ir_ui_view
-         WHERE key IN %(keys)s
-           AND {website_clause}
-        """,
-        query_params,
-    )
-    rows = cr.fetchall()
-    if len(set(w_id for *_, w_id in rows)) > 1:
-        raise ValueError(
-            f'Provided keys match more than one website view! Specify the "website_id"'
+    view_keys = [ViewKey(key, website_id) if isinstance(key, str) else key for key in keys]
+    keys_to_id_map = {
+        view_key.key: view_id
+        for view_key, view_ids in get_views_ids(
+            cr, keys=view_keys, website_id=website_id, create_missing_cows=create_missing, mapped=True
         )
-    keys_ids_map = {key: view_id for key, view_id, _ in rows}
+        for (view_id,) in (view_ids,)  # raise if len != 1, don't look too close
+    }
 
-    missing_keys = list(set(keys) - keys_ids_map.keys())
-
-    if missing_keys and create_missing:
-        assert website_id
-        # Ensure keys are ordered such that parents are before their children.
-        # Avoids children being copied and deleted when a parent is COWed 
-        cr.execute(
-            """
-            WITH RECURSIVE __parent_store_compute(id, parent_path) AS (
-                SELECT row.id, row.id || '/'
-                  FROM ir_ui_view row
-                 WHERE row.inherit_id IS NULL
-            UNION
-                SELECT row.id, comp.parent_path || row.id || '/'
-                  FROM ir_ui_view row, __parent_store_compute comp
-                 WHERE row.inherit_id = comp.id
-            )
-               SELECT iuv.key
-                 FROM ir_ui_view iuv
-            LEFT JOIN __parent_store_compute comp ON iuv.id = comp.id
-                WHERE key IN %s
-                  AND iuv.website_id IS NULL
-             ORDER BY comp.parent_path
-            """,
-            (tuple(missing_keys),)
-        )
-        sorted_missing_keys = [key for [key] in cr.fetchall()]
-
-        # All `missing_keys` should be present in `sorted_missing_keys`,
-        # otherwise trying to edit a non-existent key would fail silently
-        sorted_missing_keys.extend(set(missing_keys) - set(sorted_missing_keys))
-
-        keys_ids_map.update({key: create_cow_view(cr, key, website_id) for key in sorted_missing_keys})
+    return keys_to_id_map
 
 
-    if len(keys_ids_map) != len(keys):
-        raise ValueError(f"Expected {len(keys)} views got {len(keys_ids_map)}")
-
-    return keys_ids_map
-
-
-def edit_website_views(
-    cr, view_operations, website_id=None, create_missing=False, verbose=True
-):
+def edit_website_views(cr, view_operations, website_id=WebsiteId.NOTNULL, create_missing=False, verbose=True):
     """
     Edit one or more website views with the specified operations.
 
@@ -250,22 +518,28 @@ def edit_website_views(
     as keys for the ``view_operations`` dict.
 
     :param cr: the database cursor.
-    :param view_operations: a mapping of website views keys to a sequence of operations
-        to apply to the corresponding view.
-    :param website_id: the website_id for which to match the views.
-        Defaults to `None`, which will match any non-NULL website.
-        If the db is multi-website, you'd want to explicitly provide this argument.
+    :type cr: psycopg2.cursor
+    :param view_operations: a mapping of website views keys (or ids, or :class:`ViewKey`s) to a sequence
+        of operations to apply to the corresponding view.
+        N.B. contrary to :func:`edit_views`, strings will be interpreted as keys instead of xmlids.
+    :type view_operations: typing.Mapping[int | str | ViewKey, typing.Sequence[ViewOperation]]
+    :param website_id: the ``website_id`` for which to match the views. Defaults to `WebsiteId.NOTNULL`,
+        which will match any non-NULL website. You will need to to explicitly provide this argument
+        if the db is multi-website or if using ``create_missing``.
+    :type website_id: int | WebsiteId | None
     :param create_missing: COW-create missing website-specific views from "template" ones.
+    :type create_missing: bool
     :param verbose: same as :func:`edit_views` ``verbose`` argument.
+    :type verbose: bool
+    :rtype: None
     """
-    views = get_website_views_ids(
-        cr,
-        list(view_operations.keys()),
-        website_id=website_id,
-        create_missing=create_missing,
+    view_operations = {
+        ViewKey(key, website_id) if isinstance(key, str) else key: operations
+        for key, operations in view_operations.items()
+    }
+    edit_views(
+        cr, view_operations, verbose, update_arch=True, website_id=website_id, create_missing_cows=create_missing
     )
-    view_operations = {view_id: view_operations[key] for key, view_id in views.items()}
-    edit_views(cr, view_operations, verbose, update_arch=True)
 
 
 def activate_views(cr, ids_or_xmlids=None, *more_ids_or_xmlids, ids=None, xmlids=None):
