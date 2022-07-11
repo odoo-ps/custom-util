@@ -11,6 +11,16 @@ import lxml.etree as etree
 # TODO: also handle qweb-specific t-att(f)- attributes?
 
 
+def _xpath_hasclass(context, *cls):
+    """Checks if the context node has all the classes passed as arguments"""
+    node_classes = set(context.context_node.attrib.get("class", "").split())
+    return node_classes.issuperset(cls)
+
+
+xpath_utils = etree.FunctionNamespace(None)
+xpath_utils["hasclass"] = _xpath_hasclass
+
+
 def innerxml(element, is_html=False):
     return (element.text or "") + "".join(
         etree.tostring(child, encoding=str, method="html" if is_html else None) for child in element
@@ -57,7 +67,7 @@ def simple_css_selector_to_xpath(selector):
             element, *classes = selector_part.split(".")
             if not element:
                 element = "*"
-            class_predicates = [f"[contains(@class, '{classname}')]" for classname in classes if classname]
+            class_predicates = [f"[hasclass('{classname}')]" for classname in classes if classname]
             xpath_parts += [separator, element + "".join(class_predicates)]
 
     return "".join(xpath_parts)
@@ -167,14 +177,11 @@ class ConvertCard(ElementOperation):
             add_classes = "card-footer"
             remove_classes = "footer"
         else:
-            return  # TODO: just add instead?
+            new_card.append(child)
+            return
 
         new_child = converter.copy_element(
-            child,
-            "div",
-            add_classes=add_classes,
-            remove_classes=remove_classes,
-            copy_attrs=False,
+            child, "div", add_classes=add_classes, remove_classes=remove_classes, copy_attrs=False
         )
 
         if "image" in classes:
@@ -207,13 +214,14 @@ class ConvertCard(ElementOperation):
 
     def __call__(self, element, converter):
         classes = get_classes(element)
-        new_card = converter.copy_element(element, tag="div", copy_attrs=False)
+        new_card = converter.copy_element(element, tag="div", copy_attrs=False, copy_contents=False)
         wrapper = new_card
         if "card-horizontal" in classes:
             wrapper = etree.SubElement(new_card, "div", {"class": "row"})
         for child in element:
             self._convert_child(child, element, wrapper, converter)
         self._postprocess(element)
+        element.addnext(new_card)
         element.getparent().remove(element)
         return new_card
 
@@ -240,7 +248,7 @@ HIDE_CONVERSIONS = {
 IMAGE_CONVERSIONS = {
     C(".img-rounded"): [AddClass("rounded"), RemoveClass("img-rounded")],
     C(".img-circle"): [AddClass("rounded-circle"), RemoveClass("img-circle")],
-    C(".img-responsive"): [AddClass("img-fluid"), RemoveClass("img-responsive")],
+    C(".img-responsive"): [AddClass("img-fluid"), AddClass("d-block"), RemoveClass("img-responsive")],
 }
 BUTTONS_CONVERSIONS = {
     C(".btn-default"): [AddClass("btn-secondary"), RemoveClass("btn-default")],
@@ -368,7 +376,16 @@ class BS3to4Converter:
             element.attrib[name] = value
         return element
 
-    def copy_element(self, element, tag=None, add_classes=None, remove_classes=None, copy_attrs=True, **attributes):
+    def copy_element(
+        self,
+        element,
+        tag=None,
+        add_classes=None,
+        remove_classes=None,
+        copy_attrs=True,
+        copy_contents=True,
+        **attributes,
+    ):
         tag = tag or element.tag
 
         if remove_classes is ALL:
@@ -389,7 +406,7 @@ class BS3to4Converter:
             if classname in classes:
                 classes.remove(classname)
 
-        contents = innerxml(element, is_html=self.is_html)
+        contents = innerxml(element, is_html=self.is_html) if copy_contents else None
 
         if copy_attrs:
             attributes.update(element.attrib)
