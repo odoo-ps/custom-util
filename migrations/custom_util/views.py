@@ -390,7 +390,9 @@ def edit_views(
                 indent_tree(arch)
             updated_ids.add(view_id)
 
-    if update_arch:
+    if not updated_ids:
+        _logger.warning(f"No views edited by `edit_views`, arguments matched these ids: {views_ids_map}")
+    elif update_arch:
         cr.execute("UPDATE ir_ui_view SET arch_updated = TRUE WHERE id IN %s", [tuple(updated_ids)])
 
 
