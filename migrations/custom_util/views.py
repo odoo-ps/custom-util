@@ -978,8 +978,8 @@ class RenameElements(XPathOperation):
     :param new_name: a `str` of the new replacement ``name``.
     """
 
-    def __init__(self, name, new_name):
-        super().__init__(f'//*[@name="{name}"]')
+    def __init__(self, name, new_name, xpath="//*"):
+        super().__init__(f'{xpath}[@name="{name}"]')
         self.name = name
         self.new_name = new_name
 
