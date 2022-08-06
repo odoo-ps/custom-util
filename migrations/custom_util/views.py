@@ -393,7 +393,9 @@ def edit_views(
             updated_ids.add(view_id)
 
     if not updated_ids:
-        _logger.warning(f"No views edited by `edit_views`, arguments matched these ids: {views_ids_map}")
+        _logger.warning(
+            f"No views edited by `edit_views`, arguments matched these ids: {views_ids_map}",
+        )
     elif update_arch:
         cr.execute("UPDATE ir_ui_view SET arch_updated = TRUE WHERE id IN %s", [tuple(updated_ids)])
 
@@ -797,6 +799,11 @@ class AddElements(XPathOperation):
         if elements_xml:
             self.elements_xml = elements_xml
 
+    def __str__(self):
+        return (
+            f"Add elements `{self.elements_xml}` at XPath(s) `{self.xpaths}` (position: `{self.position.name.lower()}`)"
+        )
+
     @property
     def elements_xml(self):
         """Get the original xml string of the elements being added"""
@@ -860,10 +867,17 @@ class AddElementsFromFile(AddElements):
     """
 
     def __init__(self, xpaths, filename, source_xpaths="/*", **kwargs):
+        self.source_xpaths = source_xpaths
         with open(filename, "rb") as fp:
             arch = etree.fromstring(fp.read())
         elements_xml = extract_elements(arch, source_xpaths, view_name=filename)
         super().__init__(xpaths, elements_xml, **kwargs)
+
+    def __str__(self):
+        return (
+            f"Add elements from file `{self.filename}` matching XPath(s) `{self.source_xpaths}` "
+            f"(source) at `{self.xpaths}` (target)"
+        )
 
 
 class CopyElements(AddElements):
@@ -900,6 +914,15 @@ class CopyElements(AddElements):
         self.elements_xml = extract_elements(source_arch, self.source_xpaths, view_name=self.source_view)
         super().__call__(arch, cr)
 
+    def __str__(self):
+        result_str = (
+            f"Copy elements matching XPath(s) `{self.source_xpaths}` to elements matching XPath(s) `{self.xpaths}`"
+        )
+        if self.source_view is None:
+            return result_str
+        else:
+            return f"{result_str} from view {self.source_view}"
+
 
 class RemoveElements(XPathOperation):
     """
@@ -918,6 +941,9 @@ class RemoveElements(XPathOperation):
         for el in self.get_elements(arch):
             el.getparent().remove(el)
 
+    def __str__(self):
+        return f"Remove all elements matching XPath(s) `{self.xpaths}`"
+
 
 class RemoveFields(RemoveElements):
     """
@@ -931,9 +957,14 @@ class RemoveFields(RemoveElements):
 
     def __init__(self, names):
         if isinstance(names, str):
-            names = [names]
-        self.xpaths = [f'//field[@name="{name}"]' for name in names]
+            self.names = [names]
+        else:
+            self.names = names
+        self.xpaths = [f'//field[@name="{name}"]' for name in self.names]
         super().__init__(self.xpaths)
+
+    def __str__(self):
+        return f"Remove all fields with name(s) `{self.names}`"
 
 
 class AddInvisibleSiblingFields(AddElements):
@@ -954,11 +985,16 @@ class AddInvisibleSiblingFields(AddElements):
 
     def __init__(self, name, sibling_name, position="after"):
         # make sure we don't add siblings where they already exist
+        self.name = name
+        self.sibling_name = sibling_name
         super().__init__(
             f'//field[@name="{name}" and not(../field[@name="{sibling_name}"])]',
             f'<field name="{sibling_name}" invisible="1" />',
             position=position,
         )
+
+    def __str__(self):
+        return f"Add invisible sibling `field[@name='{self.sibling_name}']` to all `field[@name='{self.name}']`"
 
 
 class RenameElements(XPathOperation):
@@ -981,6 +1017,9 @@ class RenameElements(XPathOperation):
     def __call__(self, arch, cr=None):
         for el in self.get_elements(arch):
             el.attrib["name"] = self.new_name
+
+    def __str__(self):
+        return f"Update `name` attribute: `{self.name}` -> `{self.new_name}` (XPath(s): `{self.xpaths}`)"
 
 
 class UpdateAttributes(XPathOperation):
@@ -1028,6 +1067,9 @@ class UpdateAttributes(XPathOperation):
                     del el.attrib[attr_name]
                 else:
                     el.attrib[attr_name] = new_value
+
+    def __str__(self):
+        return f"Update attributes: `{self.attrs_dict}` (XPath(s): `{self.xpaths}`)"
 
 
 # TODO: add some convenience operation to fixup xpath expr.
@@ -1119,6 +1161,9 @@ class ReplaceValue(XPathOperation):
                 if new_value is not None:
                     el.text = new_value
 
+    def __str__(self):
+        return f"Replace all variables matching `{self.pattern}` with `{self.repl}` (XPath(s): `{self.xpaths}`)"
+
 
 class MoveElements(XPathOperation):
     """
@@ -1156,6 +1201,9 @@ class MoveElements(XPathOperation):
             dest_el.append(el)
             if self.prune_parents:
                 self._prune_empty(parent_el)
+
+    def __str__(self):
+        return f"Move elements matching XPath(s) `{self.xpaths}` to `{self.destination}`"
 
 
 def remove_broken_dashboard_actions(cr, broken_elements_xpaths, views_ids=None):
