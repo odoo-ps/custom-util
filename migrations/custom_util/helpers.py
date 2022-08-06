@@ -10,6 +10,7 @@ __all__ = [
     "STUDIO_XMLID_RE",
     "expand_studio_xmlids",
     "get_ids",
+    "get_model_xmlid_basename",
 ]
 
 
@@ -33,6 +34,7 @@ def expand_studio_xmlids(xmlids, do_raise=True):
     :return: a list of expanded xmlids.
     :rtype: list[str]
     """
+
     def expand(xmlid):
         if STUDIO_XMLID_RE.match(xmlid):
             return f"studio_customization.{xmlid}"
@@ -157,3 +159,8 @@ def get_ids(
         return dict(ids_by_origin)
     else:
         return set(id_origins_map.keys())
+
+
+def get_model_xmlid_basename(model_name):
+    replaced = model_name.replace(".", "_")
+    return f"model_{replaced}"

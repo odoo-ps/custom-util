@@ -48,5 +48,6 @@ Temporary Items
 .ropeproject
 .pydevproject
 .settings
+.mypy_cache
+
 # Project-specific files and directories
-*.zip

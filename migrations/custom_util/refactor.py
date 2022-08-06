@@ -11,6 +11,7 @@ from odoo.upgrade import util
 
 from .helpers import get_ids
 
+
 __all__ = [
     "build_chained_replace",
     "fix_renames_in_fields",
@@ -43,6 +44,7 @@ MODELS_FIELDS_DEFAULT = {
     ],
 }
 
+
 def build_chained_replace(field_name, values_mapping):
     """
     Utility function that generates PostgreSQL query statements to replace multiple
@@ -59,9 +61,10 @@ def build_chained_replace(field_name, values_mapping):
         old_placeholder = f"old{i}"
         new_placeholder = f"new{i}"
         sub_expr = f"regexp_replace({sub_expr}, %({old_placeholder})s, %({new_placeholder})s, 'g')"
-        query_kwargs[old_placeholder] = fr"\m{old_value}\M"
+        query_kwargs[old_placeholder] = rf"\m{old_value}\M"
         query_kwargs[new_placeholder] = new_value
     return sub_expr, query_kwargs
+
 
 def rename_in_translation(cr, name, values_mapping, res_ids):
     """
@@ -85,6 +88,7 @@ def rename_in_translation(cr, name, values_mapping, res_ids):
         query_kwargs,
     )
 
+
 def fix_renames_in_records(cr, names_map, model, ids_or_xmlids=None, fields=None):
     """
     Fix indirect references of renamed fields in existing records.
@@ -103,9 +107,7 @@ def fix_renames_in_records(cr, names_map, model, ids_or_xmlids=None, fields=None
     if not fields:
         raise KeyError(f"No default fields found for model {model}")
 
-    set_clauses = ", ".join(
-        f"{field} = regexp_replace({field}, %(old_sub)s, %(new)s, 'g')" for field in fields
-    )
+    set_clauses = ", ".join(f"{field} = regexp_replace({field}, %(old_sub)s, %(new)s, 'g')" for field in fields)
 
     ids = None
     where_clauses = ""
@@ -113,21 +115,20 @@ def fix_renames_in_records(cr, names_map, model, ids_or_xmlids=None, fields=None
         ids = tuple(get_ids(cr, ids_or_xmlids, model=model))
         where_clauses = "id IN %(ids)s AND "
 
-    where_clauses += "(" + " OR ".join(
-        f"{field} SIMILAR TO %(old_where)s" for field in fields
-    ) + ")"
+    where_clauses += "(" + " OR ".join(f"{field} SIMILAR TO %(old_where)s" for field in fields) + ")"
 
     table_name = util.table_of_model(cr, model)
     affected_ids = set()
     for old, new in names_map.items():
         cr.execute(
             f"UPDATE {table_name} SET {set_clauses} WHERE {where_clauses} RETURNING id",
-            dict(old_sub=fr"\m{old}\M", old_where=fr"%\m{old}\M%", new=new, ids=ids),
+            dict(old_sub=rf"\m{old}\M", old_where=rf"%\m{old}\M%", new=new, ids=ids),
         )
         affected_ids |= {row[0] for row in cr.fetchall()}
 
     for field in fields:
         rename_in_translation(cr, f"{model},{field}", names_map, affected_ids)
+
 
 # TODO: right now the implementation is greedy, replacing every occurrence everywhere.
 #       Maybe we should restrict the names map to target only their specific models,
@@ -149,6 +150,7 @@ def fix_renames_in_fields(cr, names_map):
     for model, fields in MODELS_FIELDS_DEFAULT.items():
         fix_renames_in_records(cr, names_map, model, fields=fields)
 
+
 def do_pending_refactors(cr):
     """
     Apply pending refactor operations (post field renames changes, etc.)
@@ -158,7 +160,7 @@ def do_pending_refactors(cr):
     _logger.info("Applying pending post-refactors steps")
 
     merged_renames: MutableMapping[str, str] = {}
-    for model, field_renames in FIELD_RENAMES_PENDING.items():
+    for field_renames in FIELD_RENAMES_PENDING.values():
         for field_old_name, field_new_name in field_renames.items():
             existing_rename_value = merged_renames.get(field_old_name)
             if existing_rename_value and existing_rename_value != field_new_name:

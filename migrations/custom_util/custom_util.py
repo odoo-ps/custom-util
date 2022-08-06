@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
 
+import inspect
 import logging
 import os
-import re
-import inspect
 import pathlib
+import re
 import warnings
-from typing import Collection
 
 from odoo.upgrade import util
 
 from . import refactor
+from .helpers import get_model_xmlid_basename
 
 
 # TODO: some of these functions should probably be renamed.
@@ -48,6 +48,7 @@ _logger = logging.getLogger(__name__)
 
 # --- Patching `util._get_base_version()`
 
+
 def _patched_get_base_version(cr):
     """
     Patched version of `util._get_base_version()` that works outside of `base` module,
@@ -75,7 +76,7 @@ except AttributeError:
 def custom_rename_model(cr, old, new):
     cr.execute("UPDATE ir_model SET state='base' WHERE model=%s", (old,))
     util.rename_model(cr, old, new)
-    _logger.info('rename model : %s -> %s' % (old, new))
+    _logger.info(f"rename model : {old} -> {new}")
 
 
 def rename_field(cr, model, old, new, set_state_base=True, add_to_refactor=True):
@@ -92,7 +93,7 @@ def rename_field(cr, model, old, new, set_state_base=True, add_to_refactor=True)
 
 def custom_rename_field(cr, model, old, new):
     rename_field(cr, model, old, new, set_state_base=True)
-    _logger.info('rename field : %s -> %s on model %s' % (old, new, model))
+    _logger.info(f"rename field : {old} -> {new} on model {model}")
 
 
 def transfer_custom_fields(cr, src_module, dest_module, fields_to_transfer):
@@ -143,14 +144,17 @@ def custom_rename_module(cr, old, new):
     util.rename_module(cr, old, new)
 
 
-#FIXME Update all fields where related contains the old field (be sure it's pointing the right model)
+# FIXME Update all fields where related contains the old field (be sure it's pointing the right model)
 def update_related_field(cr, list_fields):
-    """ Syntax of list_fields = [('sale.order.line', 'x_mo_id', 'mo_id'),]"""
-    related_fields = util.env(cr)['ir.model.fields'].search([('related','!=',False)])
+    """Syntax of list_fields = [('sale.order.line', 'x_mo_id', 'mo_id'),]"""
+    related_fields = util.env(cr)["ir.model.fields"].search([("related", "!=", False)])
     for field_id in related_fields:
-      for model, old, new in list_fields:
-        if old in field_id.related:
-          cr.execute("""UPDATE ir_model_fields SET related = REPLACE(related, %s, %s) WHERE id = %s""", (old, new, field_id.id))
+        for _model, old, new in list_fields:
+            if old in field_id.related:
+                cr.execute(
+                    """UPDATE ir_model_fields SET related = REPLACE(related, %s, %s) WHERE id = %s""",
+                    (old, new, field_id.id),
+                )
 
 
 def update_relationships(cr, model, old_id, new_id):
@@ -176,9 +180,7 @@ def update_relationships(cr, model, old_id, new_id):
     if not related_fields:
         return
 
-    _logger.info(
-        f'Updating relationships to "{model}" from record id {old_id} to {new_id}'
-    )
+    _logger.info(f'Updating relationships to "{model}" from record id {old_id} to {new_id}')
 
     for name, model, ttype, relation_table, column1, column2 in related_fields:
         if ttype == "many2one":
@@ -221,19 +223,21 @@ def update_relationships(cr, model, old_id, new_id):
 
 # Update all views that contains old fields
 def update_custom_views(cr, list_fields):
-    """ Syntax of list_fields = [('sale.order.line', 'x_mo_id', 'mo_id'),]"""
-    views_to_update = util.env(cr)['ir.ui.view'].search([])
+    """Syntax of list_fields = [('sale.order.line', 'x_mo_id', 'mo_id'),]"""
+    views_to_update = util.env(cr)["ir.ui.view"].search([])
     for view_id in views_to_update:
         view_id_tmp = view_id.arch
         view_has_changed = False
         for model, old, new in list_fields:
-          if (view_id.model == model or \
-             (view_id.model == 'sale.order' and model == 'sale.order.line') or \
-             not view_id.model) and old in view_id.arch:
-            view_id_tmp = view_id_tmp.replace(old, new)
-            view_has_changed = True
+            if (
+                view_id.model == model
+                or (view_id.model == "sale.order" and model == "sale.order.line")
+                or not view_id.model
+            ) and old in view_id.arch:
+                view_id_tmp = view_id_tmp.replace(old, new)
+                view_has_changed = True
         if view_has_changed:
-          view_id.arch = view_id_tmp
+            view_id.arch = view_id_tmp
 
 
 def modules_already_installed(cr, *modules):
@@ -262,6 +266,7 @@ def merge_groups(cr, src_xmlid, dest_xmlid):
     :return: True if merging was successful, None if no merging was performed
         (eg. one of the two groups record and/or xml reference does not exist)
     """
+
     def group_info(xmlid):
         nonlocal cr
         gid = util.ref(cr, xmlid)
@@ -284,15 +289,15 @@ def merge_groups(cr, src_xmlid, dest_xmlid):
     if src_gid is None or dest_gid is None:
         group_info_t = '(id={gid}, name="{name}", xmlid="{xmlid}")'
         if src_gid is None:
-            _logger.info(
-                "Cannot merge groups, source group not found (already merged?) "
-                + group_info_t.format(gid=src_gid, name=src_name, xmlid=src_xmlid)
+            msg = "Cannot merge groups, source group not found (already merged?) " + group_info_t.format(
+                gid=src_gid, name=src_name, xmlid=src_xmlid
             )
+            _logger.info(msg)
         elif dest_gid is None:
-            _logger.warning(
-                "Cannot merge groups, destination group not found "
-                + group_info_t.format(gid=dest_gid, name=dest_name, xmlid=dest_xmlid)
+            msg = "Cannot merge groups, destination group not found " + group_info_t.format(
+                gid=dest_gid, name=dest_name, xmlid=dest_xmlid
             )
+            _logger.warning(msg)
         return None
 
     # Collect users being added to the destination group, for logging purposes
@@ -323,9 +328,7 @@ def merge_groups(cr, src_xmlid, dest_xmlid):
     util.remove_record(cr, src_xmlid)
 
     if added_users:
-        added_users_md = "\n".join(
-            f" - uid: **{uid}**, login: `{login}`" for uid, login in added_users
-        )
+        added_users_md = "\n".join(f" - uid: **{uid}**, login: `{login}`" for uid, login in added_users)
         message = (
             f"The group `{src_name}` has been merged into group `{dest_name}`. \n"
             "The following users have been added to the destination group:\n"
@@ -343,14 +346,12 @@ def merge_groups(cr, src_xmlid, dest_xmlid):
 
 
 def _force_migration_of_fresh_modules(cr, modules):
-
     for module, path in modules.items():
-
         if util.module_installed(cr, module):
-            _logger.info('Skipping forced migration for module %s, already installed' % module)
+            _logger.info(f"Skipping forced migration for module {module}, already installed")
             continue
 
-        _logger.info('Forcing migration for module %s' % module)
+        _logger.info(f"Forcing migration for module {module}")
 
         util.force_install_module(cr, module)
         util.force_migration_of_fresh_module(cr, module)
@@ -358,11 +359,14 @@ def _force_migration_of_fresh_modules(cr, modules):
         version = path.parts[-2]
         util.import_script(path).migrate(cr, version)
 
-        cr.execute("""
+        cr.execute(
+            """
             UPDATE ir_module_module
                SET latest_version = %s
              WHERE name = %s
-        """, (version, module,))
+            """,
+            (version, module),
+        )
 
 
 def merge_model_and_data(cr, source_model, target_model, copy_fields, set_values=None):
@@ -416,7 +420,7 @@ def merge_model_and_data(cr, source_model, target_model, copy_fields, set_values
                FROM {source_table}
           RETURNING {old_id_column}, id
         """,
-        list(set_values.values())
+        list(set_values.values()),
     )
     id_map = dict(cr.fetchall())
     if id_map:
@@ -428,39 +432,31 @@ def merge_model_and_data(cr, source_model, target_model, copy_fields, set_values
 
 
 def _merge_modules(cr, src_modules, dest_module):
-
     for module in src_modules:
-        _logger.info('Merging %s ⟹ %s' % (module, dest_module))
+        _logger.info(f"Merging {module} ⟹ {dest_module}")
         util.merge_module(cr, module, dest_module, update_dependers=False)
 
 
 def _uninstall_modules(cr, modules):
-
     for module in modules:
-        _logger.info('Uninstalling module %s' % module)
+        _logger.info(f"Uninstalling module {module}")
         util.uninstall_module(cr, module)
         util.remove_module(cr, module)
 
 
 # TODO: kept for backwards compatibility, maybe just remove?
 def _rename_xmlid(cr, values_or_xmlid, module):
-    """
-    """
-
     noupdate = None
 
     if isinstance(values_or_xmlid, str):
-
-        if '.' not in values_or_xmlid:
-            _logger.error(f'Skipping renaming {values_or_xmlid}, it must be a fully qualified external identifier')
+        if "." not in values_or_xmlid:
+            _logger.error(f"Skipping renaming {values_or_xmlid}, it must be a fully qualified external identifier")
             return
 
         dest_module = module
-        src_module, name = values_or_xmlid.split('.')
+        src_module, name = values_or_xmlid.split(".")
         new_name = name
-
     else:
-
         # append empty kwargs
         values = list(values_or_xmlid)
         if len(values) < 3:
@@ -476,7 +472,7 @@ def _rename_xmlid(cr, values_or_xmlid, module):
         src_module, dest_module, name, kwargs = values
 
         if not name:
-            _logger.error(f'Skipping renaming for {values_or_xmlid}, missing name')
+            _logger.error(f"Skipping renaming for {values_or_xmlid}, missing name")
             return
 
         if not src_module:
@@ -486,12 +482,12 @@ def _rename_xmlid(cr, values_or_xmlid, module):
             dest_module = module
 
         noupdate = True
-        if 'noupdate' in kwargs:
-            noupdate = kwargs['noupdate']
+        if "noupdate" in kwargs:
+            noupdate = kwargs["noupdate"]
 
         new_name = name
-        if 'new_name' in kwargs:
-            new_name = kwargs['new_name']
+        if "new_name" in kwargs:
+            new_name = kwargs["new_name"]
 
     modules_to_check = (dest_module, src_module) if dest_module != src_module else (src_module,)
     if not util.modules_installed(cr, *modules_to_check):
@@ -501,17 +497,12 @@ def _rename_xmlid(cr, values_or_xmlid, module):
         )
         return
 
-    old_xmlid = '%s.%s' % (src_module, name)
-    new_xmlid = '%s.%s' % (dest_module, new_name)
+    old_xmlid = "%s.%s" % (src_module, name)
+    new_xmlid = "%s.%s" % (dest_module, new_name)
 
-    _logger.debug('Renaming %s ⟹ %s' % (old_xmlid, new_xmlid))
+    _logger.debug(f"Renaming {old_xmlid} ⟹ {new_xmlid}")
 
-    util.rename_xmlid(
-        cr,
-        old_xmlid,
-        new_xmlid,
-        noupdate=noupdate
-    )
+    util.rename_xmlid(cr, old_xmlid, new_xmlid, noupdate=noupdate)
 
 
 def rename_xmlids(cr, pairs, detect_module=True, noupdate=None):
@@ -536,9 +527,7 @@ def rename_xmlids(cr, pairs, detect_module=True, noupdate=None):
             old_module, old_name = process_xmlid(old_xmlid_raw)
             new_module, new_name = process_xmlid(new_xmlid_raw)
         except ValueError as exc:
-            _logger.error(
-                f"Skipping xmlid rename {old_xmlid_raw} => {new_xmlid_raw}: {exc}"
-            )
+            _logger.error(f"Skipping xmlid rename {old_xmlid_raw} => {new_xmlid_raw}: {exc}")
             continue
 
         old_xmlid = f"{old_module}.{old_name}"
@@ -549,9 +538,6 @@ def rename_xmlids(cr, pairs, detect_module=True, noupdate=None):
 
 
 def _check_models(cr, old, new):
-    """
-    """
-
     old_t = util.table_of_model(cr, old)
     if not util.table_exists(cr, old_t):
         return -1
@@ -564,38 +550,25 @@ def _check_models(cr, old, new):
 
 
 def _rename_field(cr, model, table, old, new, old_modelname=None, remove=False):
-    """
-    """
-
     ok = bool(model and table and old and new)
-    assert ok, 'model=%s, table=%s, old=%s, new=%s' % (model, table, old, new)
+    assert ok, "model=%s, table=%s, old=%s, new=%s" % (model, table, old, new)
 
     if not remove:
-
-        _logger.info('Renaming %s\'s field: %s ⟹ %s' % (model, old, new))
-
+        _logger.info(f"Renaming {model}'s field: {old} ⟹ {new}")
         rename_field(cr, model, old, new, set_state_base=True)
-
     else:
-        _logger.info('Removing %s\'s field: %s' % (old_modelname or model, old))
+        _logger.info(f"Removing {old_modelname or model}'s field: {old}")
         util.remove_field(cr, old_modelname or model, old)
 
 
 def _rename_m2m_relations(cr, data):
-    """
-    """
-
-
-    for d in data:
-
-        old, new, *fks = d
-
+    for (old, new, *fks) in data:
         if not util.table_exists(cr, old):
-            _logger.debug('Skipping migrating m2m table %s, table does not exist' % old)
+            _logger.debug(f"Skipping migrating m2m table {old}, table does not exist")
             return
 
         if util.table_exists(cr, new):
-            _logger.debug('Skipping migrating m2m table %s, table already exists' % new)
+            _logger.debug(f"Skipping migrating m2m table {new}, table already exists")
             return
 
         fk1 = None
@@ -604,76 +577,59 @@ def _rename_m2m_relations(cr, data):
         if fks:
             fk1, fk2 = fks
 
-        if (
-            (fk1 and not isinstance(fk1, tuple) and len(fk1) != 3) or
-            (fk2 and not isinstance(fk2, tuple) and len(fk2) != 3)
+        if (fk1 and not isinstance(fk1, tuple) and len(fk1) != 3) or (
+            fk2 and not isinstance(fk2, tuple) and len(fk2) != 3
         ):
-            _logger.error('Please use a 3-tuple (<old column name>, <new column name>)')
+            _logger.error("Please use a 3-tuple (<old column name>, <new column name>)")
             return
 
-        _logger.debug('Renaming M2M relation %s ⟹ %s' % (old, new))
+        _logger.debug(f"Renaming M2M relation {old} ⟹ {new}")
 
-        cr.execute(f'ALTER TABLE {old} RENAME TO {new}')
+        cr.execute(f"ALTER TABLE {old} RENAME TO {new}")
 
         if fk1:
-            cr.execute(f'ALTER TABLE {new} RENAME COLUMN {fk1[0]} TO {fk1[1]}')
+            cr.execute(f"ALTER TABLE {new} RENAME COLUMN {fk1[0]} TO {fk1[1]}")
 
         if fk2:
-            cr.execute(f'ALTER TABLE {new} RENAME COLUMN {fk2[0]} TO {fk2[1]}')
+            cr.execute(f"ALTER TABLE {new} RENAME COLUMN {fk2[0]} TO {fk2[1]}")
 
 
 def _rename_model_fields(cr, model, fields, old_modelname=None):
-
     table = util.table_of_model(cr, model)
-
     for field in fields:
-
         field = list(field)
         if len(field) < 3:
             field.append({})
 
         new, old, kwargs = field
-
-        _rename_field(
-            cr,
-            model,
-            table,
-            old,
-            new,
-            old_modelname=old_modelname,
-            remove=kwargs.get('to_delete', False)
-        )
+        _rename_field(cr, model, table, old, new, old_modelname=old_modelname, remove=kwargs.get("to_delete", False))
 
 
 def _upgrade_custom_models(cr, datas, skipped_models=None):
-
     skipped_models = skipped_models or []
 
-    for data in datas:
-
-        new_modelname, old_modelname, xmlid, fields = data
-
+    for (new_modelname, old_modelname, xmlid, fields) in datas:
         if new_modelname in skipped_models:
-            _logger.debug('Skipping renaming model %s forced' % old_modelname)
+            _logger.debug(f"Skipping renaming model {old_modelname} forced")
             continue
 
         check = _check_models(cr, old_modelname, new_modelname)
         if check in (1, -1):
 
             if check == 1:
-                _logger.error('Skipping migrating model %s, table already exists' % new_modelname)
+                _logger.error(f"Skipping migrating model {new_modelname}, table already exists")
             else:
-                _logger.error('Skipping migrating model %s, table for %s does not exist' % (new_modelname, old_modelname))
+                _logger.error(f"Skipping migrating model {new_modelname}, table for {old_modelname} does not exist")
 
             continue
 
-        _logger.info('Renaming model: %s ⟹ %s ' % (old_modelname, new_modelname))
+        _logger.info(f"Renaming model: {old_modelname} ⟹ {new_modelname} ")
 
         util.rename_model(cr, old_modelname, new_modelname)
         cr.execute("UPDATE ir_model SET state = 'base' WHERE model = %s", (new_modelname,))
         cr.execute(
             "UPDATE ir_model_data SET name = %s WHERE model = 'ir.model' AND name = %s",
-            ('model_%s' % new_modelname.replace(".", "_"), xmlid),
+            (get_model_xmlid_basename(new_modelname), xmlid),
         )
 
         if not fields:
@@ -683,13 +639,11 @@ def _upgrade_custom_models(cr, datas, skipped_models=None):
 
 
 def _upgrade_standard_models(cr, data):
-
     for model, fields in data.items():
-
         if not fields:
             continue
 
-        _logger.info('Renaming model %s\'s fields' % model)
+        _logger.info(f"Renaming model {model}'s fields {fields}")
 
         _rename_model_fields(cr, model, fields)
 
@@ -730,9 +684,7 @@ def migrate_invoice_move_data(cr, fields=None, lines_fields=None, overwrite=Fals
             elif isinstance(field_spec, (tuple, list)) and len(field_spec) == 2:
                 invoice_field, move_field = field_spec
             else:
-                raise ValueError(
-                    f"Field must be a string or a 2-tuple, got: {field_spec}"
-                )
+                raise ValueError(f"Field must be a string or a 2-tuple, got: {field_spec}")
 
             set_stmts.append(
                 f"{move_field} = "
@@ -780,7 +732,7 @@ def get_migscript_module():
     returns the module of the migscript
     """
     for frame in inspect.stack():
-        if frame.function == 'migrate':
+        if frame.function == "migrate":
             path = pathlib.PurePath(frame.filename)
             return path.parts[-4]
     raise RuntimeError("Could not automatically determine calling migration script module name")
@@ -809,5 +761,5 @@ def set_not_imported_modules(cr, modules):
            SET imported = FALSE
          WHERE name IN %s
     """,
-        [tuple(modules), ],
+        [tuple(modules)],
     )

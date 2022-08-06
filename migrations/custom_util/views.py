@@ -6,8 +6,7 @@ import enum
 import logging
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from textwrap import dedent
-from typing import Pattern, Collection, Sequence
+from typing import Collection, Pattern, Sequence
 
 from lxml import etree
 
@@ -45,7 +44,7 @@ __all__ = [
     "ReplaceValue",
     "MoveElements",
     "remove_broken_dashboard_actions",
-    "cleanup_old_dashboards"
+    "cleanup_old_dashboards",
 ]
 
 
@@ -117,10 +116,13 @@ class ViewKey:
 
         cr.execute(
             f"SELECT id, key, website_id FROM ir_ui_view WHERE {' OR '.join(where_clauses.keys())}",
-            tuple(tuple(l) for l in where_clauses.values()),
+            tuple(tuple(where_clause_list) for where_clause_list in where_clauses.values()),
         )
         res_by_id = {id_: (key, website_id) for id_, key, website_id in cr.fetchall()}
-        ids_by_key = {vk: set(id_ for id_, (view_key, website_id) in res_by_id.items() if vk.matches(view_key, website_id)) for vk in keys}
+        ids_by_key = {
+            vk: set(id_ for id_, (view_key, website_id) in res_by_id.items() if vk.matches(view_key, website_id))
+            for vk in keys
+        }
 
         unmatched_ids = res_by_id.keys() - set(id_ for ids in ids_by_key.values() for id_ in ids)
         assert not unmatched_ids, f"Query returned ids that don't match any {cls_name}: {unmatched_ids}"
@@ -575,9 +577,7 @@ def activate_views(cr, ids_or_xmlids=None, *more_ids_or_xmlids, ids=None, xmlids
     )
     activated_views = set(row[0] for row in cr.fetchall())
     if activated_views != ids:
-        _logger.info(
-            f"Tried to activate views that were already active: {ids-activated_views}"
-        )
+        _logger.info(f"Tried to activate views that were already active: {ids - activated_views}")
     _logger.debug(f"Activated views: {activated_views}")
     return activated_views
 
@@ -724,9 +724,7 @@ class XPathOperation(ViewOperation, ABC):
             elements = xpath(arch)
             # Check return value https://lxml.de/xpathxslt.html#xpath-return-values
             if not isinstance(elements, list):
-                raise ValueError(
-                    f'XPath expression "{xpath}" does not yield elements. Got: {elements}'
-                )
+                raise ValueError(f'XPath expression "{xpath}" does not yield elements. Got: {elements}')
             if not elements:
                 _logger.warning(f"XPath expression {xpath} yielded no results")
 
@@ -793,8 +791,7 @@ class AddElements(XPathOperation):
                 position = AddElementPosition[position.upper()]
             except KeyError as exc:
                 raise ValueError(
-                    f'"position" must be one of '
-                    f'{",".join(e.name for e in AddElementPosition)}, got "{position}"'
+                    f'"position" must be one of {",".join(e.name for e in AddElementPosition)}, got "{position}"'
                 ) from exc
         self.position = position
         if elements_xml:
@@ -900,9 +897,7 @@ class CopyElements(AddElements):
         if self.source_view and not cr:
             raise RuntimeError("Cannot copy elements from other views without cursor")
         source_arch = get_arch(cr, self.source_view) if self.source_view else arch
-        self.elements_xml = extract_elements(
-            source_arch, self.source_xpaths, view_name=self.source_view
-        )
+        self.elements_xml = extract_elements(source_arch, self.source_xpaths, view_name=self.source_view)
         super().__call__(arch, cr)
 
 
@@ -1083,9 +1078,7 @@ class ReplaceValue(XPathOperation):
     :type position: :class:`ReplacePosition`, or a `str` with the flag name.
     """
 
-    def __init__(
-        self, pattern, repl, xpaths="//*", position=ReplacePosition.ATTRIBUTES
-    ):
+    def __init__(self, pattern, repl, xpaths="//*", position=ReplacePosition.ATTRIBUTES):
         super().__init__(xpaths)
         self.pattern = pattern
         self.repl = repl
@@ -1094,8 +1087,7 @@ class ReplaceValue(XPathOperation):
                 position = ReplacePosition[position.upper()]
             except KeyError as exc:
                 raise ValueError(
-                    f'"position" must be one of '
-                    f'{",".join(e.name for e in ReplacePosition)}, got "{position}"'
+                    f'"position" must be one of {",".join(e.name for e in ReplacePosition)}, got "{position}"'
                 ) from exc
         self.position = position
 
@@ -1184,9 +1176,7 @@ def remove_broken_dashboard_actions(cr, broken_elements_xpaths, views_ids=None):
         boards_views = env["ir.ui.view.custom"].browse(views_ids)
     else:
         boards_ref_view = env.ref("board.board_my_dash_view")
-        boards_views = env["ir.ui.view.custom"].search(
-            [("ref_id", "=", boards_ref_view.id)]
-        )
+        boards_views = env["ir.ui.view.custom"].search([("ref_id", "=", boards_ref_view.id)])
     for board_view in boards_views:
         xml = etree.fromstring(board_view.arch)
         for xpath in broken_elements_xpaths:
