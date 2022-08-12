@@ -111,7 +111,7 @@ def get_ids(
                 raise ValueError(f'Invalid id/xmlid value type "{type(i)}": {i}')
 
     if not (ids or xmlids):
-        raise TypeError("No views ids or xmlids provided")
+        raise TypeError("No ids or xmlids provided")
 
     id_origins_map = {id_: {id_} for id_ in ids}  # id to set of origins (ie. ids, xmlids, etc.)
 
@@ -146,10 +146,10 @@ def get_ids(
         table = util.table_of_model(cr, model)
         cr.execute(f"SELECT array_agg(id) FROM {table} WHERE id IN %s", [tuple(id_origins_map.keys())])
         [[existing_ids]] = cr.fetchall()
-        missing_ids = id_origins_map.keys() - set(existing_ids)
+        missing_ids = id_origins_map.keys() - set(existing_ids or [])
         if missing_ids:
             unmatched_origins = {origin for id_ in missing_ids | {None} for origin in id_origins_map[id_]}
-            raise IndexError(f"Records for these ids/xmlids are missing in the database: {unmatched_origins}")
+            raise IndexError(f"`{model}` records for these ids/xmlids are missing in the database: {unmatched_origins}")
 
     if mapped:
         ids_by_origin = defaultdict(set)
