@@ -1010,13 +1010,16 @@ class RenameElements(XPathOperation):
     """
 
     def __init__(self, name, new_name, xpath="//*"):
-        super().__init__(f'{xpath}[@name="{name}"]')
+        super().__init__(f'{xpath}[@name="{name}"] | {xpath}[@name="{name}"]/../label[@for={name}]')
         self.name = name
         self.new_name = new_name
 
     def __call__(self, arch, cr=None):
         for el in self.get_elements(arch):
-            el.attrib["name"] = self.new_name
+            if el.tag == "label":
+                el.attrib["for"] = self.new_name
+            else:
+                el.attrib["name"] = self.new_name
 
     def __str__(self):
         return f"Update `name` attribute: `{self.name}` -> `{self.new_name}` (XPath(s): `{self.xpaths}`)"
