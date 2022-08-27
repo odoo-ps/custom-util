@@ -4,6 +4,7 @@ Helper functions to manipulate views and templates.
 import logging
 
 from lxml import etree
+from psycopg2.extras import execute_values
 
 from odoo.upgrade import util
 
@@ -17,6 +18,8 @@ __all__ = [
     "get_website_views_ids",
     "edit_website_views",
     "convert_views_bs3_to_bs4",
+    "get_website_html_fields",
+    "convert_html_fields_bs3_to_bs4",
     "activate_views",
     "remove_broken_dashboard_actions",
     "cleanup_old_dashboards",
@@ -203,6 +206,94 @@ def convert_views_bs3_to_bs4(cr, ids_or_xmlids=None, *more_ids_or_xmlids, ids=No
             bs3_to_bs4.convert_tree(arch)
 
     cr.execute("UPDATE ir_ui_view SET arch_updated = True WHERE id IN %s", [tuple(views_ids)])
+
+
+def get_website_html_fields(cr):
+    """
+    Return a list of model's fields that contain HTML data that is used in the website.
+    Only fields that have existing columns in the database tables are returned.
+
+    :param cr: the database cursor.
+    :type cr: psycopg2.cursor
+    :rtype: list[(str, str)]
+    """
+    cr.execute(
+        "SELECT model, name FROM ir_model_fields WHERE name ILIKE %s and ttype = %s and store = %s;",
+        ["%website_description%", "html", True],
+    )
+    website_html_fields = cr.fetchall()
+    # Add other fields that contain HTML data but are exceptions to the query above.
+    website_html_fields.extend(
+        [
+            ("event.event", "description"),
+        ]
+    )
+    return [
+        (model, field)
+        for model, field in website_html_fields
+        if util.column_exists(cr, util.table_of_model(cr, model), field)
+    ]
+
+
+def convert_html_fields_bs3_to_bs4(cr, models_fields=None, chunk_size=250, verbose=True):
+    """
+    Convert the specified model's fields that contain HTML data from Bootstrap v3 to v4.
+    If no fields are specified, all known HTML fields found in the database are converted.
+
+    :param cr: the database cursor.
+    :type cr: psycopg2.cursor
+    :param models_fields: a list of model's fields to convert.
+    :type models_fields: list[(str, str)]
+    :param chunk_size: the number of records to process at once. Defaults to 250.
+    :type chunk_size: int
+    :param verbose: whether to log info about the conversion progress. Defaults to True.
+    :type verbose: bool
+    :rtype: None
+    """
+    if models_fields is None:
+        models_fields = get_website_html_fields(cr)
+
+    if verbose:
+        _logger.info(f"Converting {len(models_fields)} fields with embedded html website data from BS3 to BS4")
+
+    for model, field in models_fields:
+        table = util.table_of_model(cr, model)
+        offset = 0
+        updated = 0
+        while True:
+            cr.execute(  # pylint: disable=sql-injection
+                f"""
+                SELECT id, {field}
+                  FROM {table}
+                 WHERE {field} IS NOT NULL AND {field} != ''
+                 OFFSET {offset} LIMIT {chunk_size}
+                """
+            )
+            if not cr.rowcount:
+                break
+
+            new_values = {}
+            for id_, value in cr.fetchall():
+                try:
+                    new_values[id_] = bs3_to_bs4.convert_arch(value, is_html=True)
+                except Exception as exc:
+                    raise RuntimeError(f"Failed converting html {model}.{field} for record id={id_}") from exc
+
+            execute_values(
+                cr,
+                f"""
+                UPDATE {table} t
+                   SET {field} = v.value
+                  FROM (VALUES %s) AS v (id, value)
+                 WHERE t.id = v.id
+                """,
+                new_values.items(),
+            )
+            updated += cr.rowcount
+            offset += chunk_size
+
+        if updated and verbose:
+            _logger.info(f"Converted {updated} `{model}` records `{field}` data from BS3 to BS4")
 
 
 def activate_views(cr, ids_or_xmlids=None, *more_ids_or_xmlids, ids=None, xmlids=None):
