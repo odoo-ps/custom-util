@@ -7,6 +7,7 @@ from lxml import etree
 
 from odoo.upgrade import util
 
+from . import bs3_to_bs4
 from .misc import ViewKey, WebsiteId, get_views_ids, indent_tree
 from .operations import ViewOperation  # noqa: F401
 
@@ -15,6 +16,7 @@ __all__ = [
     "edit_views",
     "get_website_views_ids",
     "edit_website_views",
+    "convert_views_bs3_to_bs4",
     "activate_views",
     "remove_broken_dashboard_actions",
     "cleanup_old_dashboards",
@@ -186,6 +188,21 @@ def edit_website_views(cr, view_operations, website_id=WebsiteId.NOTNULL, create
     edit_views(
         cr, view_operations, verbose, update_arch=True, website_id=website_id, create_missing_cows=create_missing
     )
+
+
+def convert_views_bs3_to_bs4(cr, ids_or_xmlids=None, *more_ids_or_xmlids, ids=None, xmlids=None):
+    """
+    Convert the specified views xml arch from Bootstrap v3 to v4.
+    Accepts the same arguments as :func:`get_views_ids`.
+    """
+    views_ids = get_views_ids(cr, ids_or_xmlids, *more_ids_or_xmlids, ids=ids, xmlids=xmlids)
+
+    _logger.info(f"Converting {len(views_ids)} templates from BS3 to BS4")
+    for view_id in views_ids:
+        with util.edit_view(cr, view_id=view_id, skip_if_not_noupdate=False) as arch:
+            bs3_to_bs4.convert_tree(arch)
+
+    cr.execute("UPDATE ir_ui_view SET arch_updated = True WHERE id IN %s", [tuple(views_ids)])
 
 
 def activate_views(cr, ids_or_xmlids=None, *more_ids_or_xmlids, ids=None, xmlids=None):
