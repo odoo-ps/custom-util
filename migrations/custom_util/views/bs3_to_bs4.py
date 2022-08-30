@@ -56,19 +56,24 @@ ALL = object()
 def simple_css_selector_to_xpath(selector):
     separator = "//"
     xpath_parts = []
-    for selector_part in re.split(r"(\s+|\s*[+>]\s*)", selector):
+    combinators = "+>,~ "
+    for selector_part in re.split(rf"(\s*[{combinators}]\s*)", selector):
         selector_part = selector_part.strip()
 
         if not selector_part:
             separator = "//"
         elif selector_part == ">":
             separator = "/"
-        else:
+        elif selector_part == ",":
+            separator = "|"
+        elif re.search(r"^(?:[a-z](-?\w+)*|[*.])", selector_part, flags=re.I):
             element, *classes = selector_part.split(".")
             if not element:
                 element = "*"
             class_predicates = [f"[hasclass('{classname}')]" for classname in classes if classname]
             xpath_parts += [separator, element + "".join(class_predicates)]
+        else:
+            raise NotImplementedError(f"Unsupported CSS selector syntax: {selector}")
 
     return "".join(xpath_parts)
 
