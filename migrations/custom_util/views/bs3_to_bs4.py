@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-
+"""
+Python script and module to convert a XML/HTML document with Bootstrap v3 to v4.
+Can be imported as a module, or run as a standalone script, providing the path of the file to convert inplace.
+Requires ``lxml`` as external dependency to be installed.
+"""
 import os.path
 import re
 import sys
@@ -22,29 +26,51 @@ xpath_utils["hasclass"] = _xpath_hasclass
 
 
 def innerxml(element, is_html=False):
+    """
+    Returns the inner XML of an element as a string.
+
+    :param element: the element to convert.
+    :type element: etree.ElementBase
+    :param is_html: whether to use HTML for serialization, XML otherwise. Defaults to False.
+    :type is_html: bool
+    :rtype: str
+    """
     return (element.text or "") + "".join(
         etree.tostring(child, encoding=str, method="html" if is_html else None) for child in element
     )
 
 
 def split_classes(class_attr):
+    """Returns a list of classes given a string of classes separated by spaces"""
     return (class_attr or "").split(" ")
 
 
 def get_classes(element):
+    """Returns the list of classes from the ``class`` attribute of an element"""
     return split_classes(element.get("class", ""))
 
 
 def join_classes(classes):
+    """Returns a string of classes given a list of classes"""
     return " ".join(classes)
 
 
 def set_classes(element, classes):
+    """Sets the ``class`` attribute of an element from a list of classes"""
     element.attrib["class"] = join_classes(classes)
 
 
 @contextmanager
 def edit_classes(element):
+    """
+    Context manager that allows to edit the classes of an element.
+    It yields the classes as a list of strings and that list can be mutated to change the classes on the element.
+
+    :param element: the element to edit the classes of.
+    :type element: etree.ElementBase
+    :return: a context manager that yields the list of classes.
+    :rtype: list[str]
+    """
     classes = get_classes(element)
     yield classes
     set_classes(element, classes)
@@ -54,6 +80,15 @@ ALL = object()
 
 
 def simple_css_selector_to_xpath(selector):
+    """
+    Converts a basic CSS selector cases to an XPath expression.
+    Supports node names, classes, ``>`` and ``,`` combinators.
+
+    :param selector: the CSS selector to convert.
+    :type selector: str
+    :return: the resulting XPath expression.
+    :rtype: str
+    """
     separator = "//"
     xpath_parts = []
     combinators = "+>,~ "
@@ -82,14 +117,36 @@ C = simple_css_selector_to_xpath
 
 
 class ElementOperation:
+    """
+    Abstract base class for defining operations to be applied on etree elements.
+    """
+
     def __call__(self, element, converter):
+        """
+        Performs the operation on the given element.
+
+        Abstract method that must be implemented by subclasses.
+
+        :param element: the etree element to apply the operation on.
+        :type element: etree.ElementBase
+        :param converter: the converter that's operating on the etree document.
+        :type converter: BS3ToBS4Converter
+        :return: the converted element, which could be the same provided, a different one, or None.
+            The returned element should be used by the converter to chain further operations.
+        :rtype: etree.ElementBase | None
+        """
         raise NotImplementedError
 
     def on(self, element, converter):
+        """Alias for __call__"""
         return self(element, converter)
 
 
 class AddClass(ElementOperation):
+    """
+    Adds a class to an element.
+    """
+
     def __init__(self, classname):
         self.classname = classname
 
@@ -101,6 +158,10 @@ class AddClass(ElementOperation):
 
 
 class RemoveClass(ElementOperation):
+    """
+    Removes a class from an element.
+    """
+
     def __init__(self, classname):
         self.classname = classname
 
@@ -112,22 +173,33 @@ class RemoveClass(ElementOperation):
 
 
 class PullUp(ElementOperation):
+    """
+    Pulls up an element children to the parent element, removing the original element.
+    """
+
     def __call__(self, element, converter):
         parent = element.getparent()
         if parent is None:
             raise ValueError(f"Cannot pull up contents of xml element with no parent: {element}")
+
         prev_sibling = element.getprevious()
         if prev_sibling is not None:
             prev_sibling.tail = ((prev_sibling.tail or "") + (element.text or "")) or None
         else:
             parent.text = ((parent.text or "") + (element.text or "")) or None
+
         for child in element:
             element.addprevious(child)
+
         parent.remove(element)
         return None
 
 
 class ConvertBlockquote(ElementOperation):
+    """
+    Converts a BS3 ``<blockquote>`` element to a BS4 ``<div>`` element with the ``blockquote`` class.
+    """
+
     def __call__(self, element, converter):
         blockquote = converter.copy_element(element, tag="div", add_classes="blockquote", copy_attrs=False)
         element.addnext(blockquote)
@@ -135,7 +207,13 @@ class ConvertBlockquote(ElementOperation):
         return blockquote
 
 
+# TODO: consider merging MakeCard and ConvertCard into one operation class
 class MakeCard(ElementOperation):
+    """
+    Pre-processes a BS3 panel, thumbnail, or well element to be converted to a BS4 card.
+    Card components conversion is then handled by the ``ConvertCard`` operation class.
+    """
+
     def __call__(self, element, converter):
         card = converter.element_factory("<div class='card'/>")
         card_body = converter.copy_element(
@@ -148,6 +226,10 @@ class MakeCard(ElementOperation):
 
 
 class ConvertCard(ElementOperation):
+    """
+    Fully converts a BS3 panel, thumbnail, or well element and their contents to a BS4 card.
+    """
+
     POST_CONVERSIONS = {
         "title": ["card-title"],
         "description": ["card-description"],
@@ -223,8 +305,10 @@ class ConvertCard(ElementOperation):
         wrapper = new_card
         if "card-horizontal" in classes:
             wrapper = etree.SubElement(new_card, "div", {"class": "row"})
+
         for child in element:
             self._convert_child(child, element, wrapper, converter)
+
         self._postprocess(element)
         element.addnext(new_card)
         element.getparent().remove(element)
@@ -339,11 +423,21 @@ CONVERSIONS = [
 
 
 class BS3to4Converter:
+    """
+    Class for converting XML or HTML strings or code from Bootstrap v3 to v4.
+
+    :param tree: the parsed XML or HTML tree to convert.
+    :type tree: etree.ElementTree
+    :param is_html: whether the tree is an HTML document.
+    :type is_html: bool
+    """
+
     def __init__(self, tree, is_html=False):
         self.tree = tree
         self.is_html = is_html
 
     def convert(self):
+        """Converts the loaded document, and returns the converted document."""
         for conversions_group in CONVERSIONS:
             for xpath, operations in conversions_group.items():
                 for element in self.tree.xpath(xpath):
@@ -355,6 +449,16 @@ class BS3to4Converter:
 
     @classmethod
     def convert_arch(cls, arch, is_html=False):
+        """
+        Class method for converting a string of XML or HTML code.
+
+        :param arch: the XML or HTML code to convert.
+        :type arch: str
+        :param is_html: whether the arch is an HTML document.
+        :type is_html: bool
+        :return: the converted XML or HTML code.
+        :rtype: str
+        """
         arch = f"<data>{arch}</data>"
         tree = etree.fromstring(arch, parser=etree.HTMLParser() if is_html else None)
         tree = cls(tree, is_html).convert()
@@ -365,15 +469,45 @@ class BS3to4Converter:
 
     @classmethod
     def convert_file(cls, path):
+        """
+        Class method for converting a XML or HTML file inplace.
+
+        :param path: the path to the XML or HTML file to convert.
+        :type path: str
+        :rtpe: None
+        """
         is_html = os.path.splitext(path)[1].startswith("htm")
         tree = etree.parse(path, parser=etree.HTMLParser() if is_html else None)
         tree = cls(tree, is_html).convert()
         tree.write(path, encoding="utf-8", method="html" if is_html else None, xml_declaration=not is_html)
 
     def element_factory(self, *args, **kwargs):
+        """
+        Helper method to be used by operation for creating new elements using the correct document type.
+        Basically a wrapper for either etree.XML or etree.HTML depending on the type of document loaded.
+
+        :param args: positional arguments to pass to the etree.XML or etree.HTML function.
+        :param kwargs: keyword arguments to pass to the etree.XML or etree.HTML function.
+        :return: the created element.
+        """
         return etree.HTML(*args, **kwargs) if self.is_html else etree.XML(*args, **kwargs)
 
     def build_element(self, tag, classes=None, contents=None, **attributes):
+        """
+        Helper method to create a new element with the given tag, classes, contents and attributes.
+        Like :meth:`~.element_factory`, can be used by operations to create elements abstracting away the document type.
+
+        :param tag: the tag of the element to create.
+        :type tag: str
+        :param classes: the classes to set on the new element.
+        :type classes: typing.Iterable[str] | None
+        :param contents: the contents of the new element (ie. inner text/HTML/XML).
+        :type contents: str | None
+        :param attributes: attributes to set on the new element, provided as keyword arguments.
+        :type attributes: str
+        :return: the created element.
+        :rtype: etree.ElementBase
+        """
         element = self.element_factory(f"<{tag}>{contents or ''}</{tag}>")
         if classes:
             set_classes(element, classes)
@@ -391,6 +525,28 @@ class BS3to4Converter:
         copy_contents=True,
         **attributes,
     ):
+        """
+        Helper method that creates a copy of an element, optionally changing the tag, classes, contents and attributes.
+        Like :meth:`~.element_factory`, can be used by operations to copy elements abstracting away the document type.
+
+        :param element: the element to copy.
+        :type element: etree.ElementBase
+        :param tag: if specified, overrides the tag of the new element.
+        :type tag: str | None
+        :param add_classes: if specified, adds the given class(es) to the new element.
+        :type add_classes: str | typing.Iterable[str] | None
+        :param remove_classes: if specified, removes the given class(es) from the new element.
+        :type remove_classes: str | typing.Iterable[str] | None
+        :param copy_attrs: if True, copies the attributes of the source element to the new one. Defaults to True.
+        :type copy_attrs: bool
+        :param copy_contents: if True, copies the contents of the source element to the new one. Defaults to True.
+        :type copy_contents: bool
+        :param attributes: attributes to set on the new element, provided as keyword arguments.
+            Will be merged with the attributes of the source element, overriding the latter.
+        :type attributes: str
+        :return: the new copied element.
+        :rtype: etree.ElementBase
+        """
         tag = tag or element.tag
 
         if remove_classes is ALL:
@@ -420,6 +576,16 @@ class BS3to4Converter:
 
 
 def convert_tree(tree, is_html=False):
+    """
+    Converts an already parsed lxml tree from Bootstrap v3 to v4 inplace.
+
+    :param tree: the lxml tree to convert.
+    :type tree: etree.ElementTree
+    :param is_html: whether the tree is an HTML document.
+    :type is_html: bool
+    :return: the converted lxml tree.
+    :rtype: etree.ElementTree
+    """
     return BS3to4Converter(tree, is_html).convert()
 
 
