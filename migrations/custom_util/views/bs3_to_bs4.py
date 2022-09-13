@@ -243,6 +243,7 @@ class ConvertCard(ElementOperation):
         "panel-body": ["card-body"],
         "panel-title": ["card-title"],
         "panel-heading": ["card-header"],
+        "panel-default": [],
         "panel": ["card"],
     }
 
@@ -268,7 +269,7 @@ class ConvertCard(ElementOperation):
             return
 
         new_child = converter.copy_element(
-            child, "div", add_classes=add_classes, remove_classes=remove_classes, copy_attrs=False
+            child, "div", add_classes=add_classes, remove_classes=remove_classes, copy_attrs=True
         )
 
         if "image" in classes:
@@ -284,14 +285,14 @@ class ConvertCard(ElementOperation):
         new_card.append(new_child)
 
         if "content" in classes:  # TODO: consider skipping for .card-background
-            [footer] = new_child.xpath("./*[contains(@class, 'footer')]")[:1] or [None]
+            [footer] = new_child.xpath("./*[hasclass('footer')]")[:1] or [None]
             if footer is not None:
                 self._convert_child(footer, old_card, new_card, converter)
                 new_child.remove(footer)
 
     def _postprocess(self, new_card):
         for old_class, new_classes in self.POST_CONVERSIONS.items():
-            for element in new_card.xpath(f".//*[contains(@class, '{old_class}')]"):
+            for element in new_card.xpath(f"(.|.//*)[hasclass('{old_class}')]"):
                 with edit_classes(element) as classes:
                     if old_class in classes:
                         classes.remove(old_class)
@@ -301,7 +302,7 @@ class ConvertCard(ElementOperation):
 
     def __call__(self, element, converter):
         classes = get_classes(element)
-        new_card = converter.copy_element(element, tag="div", copy_attrs=False, copy_contents=False)
+        new_card = converter.copy_element(element, tag="div", copy_attrs=True, copy_contents=False)
         wrapper = new_card
         if "card-horizontal" in classes:
             wrapper = etree.SubElement(new_card, "div", {"class": "row"})
@@ -309,7 +310,7 @@ class ConvertCard(ElementOperation):
         for child in element:
             self._convert_child(child, element, wrapper, converter)
 
-        self._postprocess(element)
+        self._postprocess(new_card)
         element.addnext(new_card)
         element.getparent().remove(element)
         return new_card
@@ -354,24 +355,36 @@ BUTTONS_CONVERSIONS = {
     C(".label-danger"): [AddClass("badge-danger"), RemoveClass("label-danger")],
     C(".breadcrumb > li"): [AddClass("breadcrumb-item"), RemoveClass("breadcrumb")],
 }
-LI_CONVERSIONS = {C(".list-inline > li"): [AddClass("list-inline-item")]}
+LI_CONVERSIONS = {
+    C(".list-inline > li"): [AddClass("list-inline-item")],
+}
 PAGINATION_CONVERSIONS = {
     C(".pagination > li"): [AddClass("page-item")],
     C(".pagination > li > a"): [AddClass("page-link")],
 }
-CAROUSEL_CONVERSIONS = {C(".carousel .carousel-inner > .item"): [AddClass("carousel-item"), RemoveClass("item")]}
+CAROUSEL_CONVERSIONS = {
+    C(".carousel .carousel-inner > .item"): [AddClass("carousel-item"), RemoveClass("item")],
+}
 PULL_CONVERSIONS = {
     C(".pull-right"): [AddClass("float-right"), RemoveClass("pull-right")],
     C(".pull-left"): [AddClass("float-left"), RemoveClass("pull-left")],
     C(".center-block"): [AddClass("mx-auto"), RemoveClass("center-block")],
 }
-WELL_CONVERSIONS = {C(".well"): [MakeCard()], C(".thumbnail"): [MakeCard()]}
+WELL_CONVERSIONS = {
+    C(".well"): [MakeCard()],
+    C(".thumbnail"): [MakeCard()],
+}
 BLOCKQUOTE_CONVERSIONS = {
     C("blockquote"): [ConvertBlockquote()],
     C(".blockquote.blockquote-reverse"): [AddClass("text-right"), RemoveClass("blockquote-reverse")],
 }
-DROPDOWN_CONVERSIONS = {C(".dropdown-menu > li > a"): [AddClass("dropdown-item")], C(".dropdown-menu > li"): [PullUp()]}
-IN_CONVERSIONS = {C(".in"): [AddClass("show"), RemoveClass("in")]}
+DROPDOWN_CONVERSIONS = {
+    C(".dropdown-menu > li > a"): [AddClass("dropdown-item")],
+    C(".dropdown-menu > li"): [PullUp()],
+}
+IN_CONVERSIONS = {
+    C(".in"): [AddClass("show"), RemoveClass("in")],
+}
 TABLE_CONVERSIONS = {
     C("tr.active, td.active"): [AddClass("table-active"), RemoveClass("active")],
     C("tr.success, td.success"): [AddClass("table-success"), RemoveClass("success")],
@@ -395,7 +408,10 @@ NAVBAR_CONVERSIONS = {
     C("nav.navbar"): [AddClass("navbar-expand-lg")],
     C("button.navbar-toggle"): [AddClass("navbar-expand-md"), RemoveClass("navbar-toggle")],
 }
-CARD_CONVERSIONS = {C(".card"): [ConvertCard()]}
+CARD_CONVERSIONS = {
+    C(".panel"): [ConvertCard()],
+    C(".card"): [ConvertCard()],
+}
 # TODO: grid offsets: col-(\w+)-offset-(\d+) -> offset-$1-$2
 
 CONVERSIONS = [
