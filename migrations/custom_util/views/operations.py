@@ -430,7 +430,10 @@ class UpdateAttributes(XPathOperation):
         for el in self.get_elements(arch):
             for attr_name, new_value in self.attrs_dict.items():
                 if new_value is None:
-                    del el.attrib[attr_name]
+                    try:
+                        del el.attrib[attr_name]
+                    except KeyError:
+                        _logger.warning(f"No attribute '{attr_name}' was available to delete")
                 else:
                     el.attrib[attr_name] = new_value
 
