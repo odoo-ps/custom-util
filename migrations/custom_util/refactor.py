@@ -9,7 +9,7 @@ from typing import MutableMapping
 
 from odoo.upgrade import util
 
-from .helpers import get_ids
+from .helpers import get_existing_models_fields, get_ids
 
 
 __all__ = [
@@ -103,7 +103,7 @@ def fix_renames_in_records(cr, names_map, model, ids_or_xmlids=None, fields=None
     """
     _logger.info(f'Fixing {len(names_map)} renamed fields/values referenced in "{model}"')
 
-    fields = fields or MODELS_FIELDS_DEFAULT.get(model)
+    fields = fields or get_existing_models_fields(cr, MODELS_FIELDS_DEFAULT).get(model)
     if not fields:
         raise KeyError(f"No default fields found for model {model}")
 
@@ -129,6 +129,8 @@ def fix_renames_in_records(cr, names_map, model, ids_or_xmlids=None, fields=None
     for field in fields:
         rename_in_translation(cr, f"{model},{field}", names_map, affected_ids)
 
+    _logger.info(f'Fixed {len(affected_ids)} records in "{model}"')
+
 
 # TODO: right now the implementation is greedy, replacing every occurrence everywhere.
 #       Maybe we should restrict the names map to target only their specific models,
@@ -147,7 +149,7 @@ def fix_renames_in_fields(cr, names_map):
     :param cr: the database cursor.
     :param names_map: a mapping of old to new names.
     """
-    for model, fields in MODELS_FIELDS_DEFAULT.items():
+    for model, fields in get_existing_models_fields(cr, MODELS_FIELDS_DEFAULT).items():
         fix_renames_in_records(cr, names_map, model, fields=fields)
 
 

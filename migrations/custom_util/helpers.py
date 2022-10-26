@@ -11,6 +11,7 @@ __all__ = [
     "expand_studio_xmlids",
     "get_ids",
     "get_model_xmlid_basename",
+    "get_existing_models_fields",
 ]
 
 
@@ -164,3 +165,29 @@ def get_ids(
 def get_model_xmlid_basename(model_name):
     replaced = model_name.replace(".", "_")
     return f"model_{replaced}"
+
+
+def get_existing_models_fields(cr, models_fields):
+    """
+    Return the models and fields of the given ones that actually exist in the database.
+
+    :param cr: the database cursor.
+    :type cr: psycopg2.cursor
+    :param models_fields: a mapping of model names to a list of fields.
+        The mapping can have strings, tuples, or frozensets for model names as key,
+        to specify multiple models with the same fields. These will be expanded in the results.
+    :type models_fields: dict[str | tuple[str] | frozenset[str], list[str]]
+    :return: a mapping of model names to a list of fields that actually exist in the database.
+    :rtype: dict[str, list[str]]
+    """
+    models_fields = {
+        model: fields
+        for models, fields in models_fields.items()
+        for model in ((models,) if isinstance(models, str) else models)
+    }
+    model_tables = {model: util.table_of_model(cr, model) for model in models_fields}
+    return {
+        model: [field for field in models_fields[model] if util.column_exists(cr, table, field)]
+        for model, table in model_tables.items()
+        if util.table_exists(cr, table)
+    }
