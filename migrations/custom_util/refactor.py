@@ -42,6 +42,7 @@ MODELS_FIELDS_DEFAULT = {
         "scheduled_date",
         "lang",
     ],
+    frozenset(("mail.mass_mailing", "mailing.mailing")): ["body_html", "body_arch"],
 }
 
 
