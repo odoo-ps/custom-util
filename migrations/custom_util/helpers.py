@@ -1,6 +1,7 @@
 import logging
 import re
 from collections import defaultdict
+from functools import partial
 from typing import Collection
 
 from odoo.upgrade import util
@@ -12,6 +13,7 @@ __all__ = [
     "get_ids",
     "get_model_xmlid_basename",
     "get_existing_models_fields",
+    "toggle_active",
 ]
 
 
@@ -191,3 +193,49 @@ def get_existing_models_fields(cr, models_fields):
         for model, table in model_tables.items()
         if util.table_exists(cr, table)
     }
+
+
+def toggle_active(
+    cr, model, ids_or_xmlids=None, *more_ids_or_xmlids, active, ids=None, xmlids=None, ids_getter=get_ids
+):
+    """
+    Utility function to activate/deactivate records in a model.
+    Does some basic sanity check that all the given ids/xmlids exist in the database,
+    otherwise will log an error about it, which might make an SH build fail because of it.
+
+    :param cr: the database cursor.
+    :type cr: psycopg2.cursor
+    :param model: the model name of the records.
+    :type model: str
+    :param active: whether to activate or deactivate the records. Keyword-only.
+    :type active: bool
+    :param ids_getter: the function to use to get the ids of the records. It must accept the following arguments:
+        ``cr, ids_or_xmlids, *more_ids_or_xmlids, ids, xmlids, ensure_exist``
+        If omitted, :func:`get_ids` will be used.
+    :param ids_or_xmlids: passed to ``ids_getter``. See :func:`get_ids` for details.
+    :param more_ids_or_xmlids: passed to ``ids_getter``. See :func:`get_ids` for details.
+    :param ids: passed to ``ids_getter``. See :func:`get_ids` for details.
+    :param xmlids: passed to ``ids_getter``. See :func:`get_ids` for details.
+    """
+    table = util.table_of_model(cr, model)
+    if not util.column_exists(cr, table, "active"):
+        raise ValueError(f"Model {model} has no 'active' column")
+    if ids_getter is None:
+        ids_getter = partial(get_ids, model=model)
+    try:
+        ids = ids_getter(cr, ids_or_xmlids, *more_ids_or_xmlids, ids=ids, xmlids=xmlids, ensure_exist=True)
+    except IndexError as e:
+        _logger.error(e)  # proceeding anyways, although SH builds might fail with this
+
+    cr.execute(
+        f"UPDATE {table} SET active = %s WHERE id IN %s AND active != %s RETURNING id",
+        (active, tuple(ids), active),
+    )
+    changed_ids = set(row[0] for row in cr.fetchall())
+    if changed_ids != ids:
+        action = "activate" if active else "deactivate"
+        _logger.info(
+            f"Tried to {action} {len(ids)} {model} records, but some were already {action}d: {ids - changed_ids}"
+        )
+        _logger.debug(f"{action.title()}d {model} records: {changed_ids}")
+    return changed_ids

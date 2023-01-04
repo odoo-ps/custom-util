@@ -8,6 +8,7 @@ from psycopg2.extras import execute_values
 
 from odoo.upgrade import util
 
+from ..helpers import toggle_active
 from . import bs3_to_bs4
 from .misc import ViewKey, WebsiteId, get_views_ids, indent_tree
 from .operations import ViewOperation  # noqa: F401
@@ -21,10 +22,10 @@ __all__ = [
     "get_website_html_fields",
     "convert_html_fields_bs3_to_bs4",
     "activate_views",
+    "deactivate_views",
     "remove_broken_dashboard_actions",
     "cleanup_old_dashboards",
 ]
-
 
 _logger = logging.getLogger(__name__)
 
@@ -299,37 +300,35 @@ def convert_html_fields_bs3_to_bs4(cr, models_fields=None, chunk_size=250, verbo
 def activate_views(cr, ids_or_xmlids=None, *more_ids_or_xmlids, ids=None, xmlids=None):
     """
     Utility function to activate one or more views.
-    Accepts the same arguments as :func:`get_views_ids`.
-
-    Does some basic sanity check that all the given ids/xmlids exist in the database,
-    otherwise will log an error about it, which might even make an SH build because of it.
+    See :func:`toggle_active` and :func:`get_views_ids` for more details about the arguments.
     """
-    ids = get_views_ids(cr, ids_or_xmlids, *more_ids_or_xmlids, ids=ids, xmlids=xmlids)
-
-    # check if all ids exist in ir_ui_view
-    cr.execute("SELECT id FROM ir_ui_view WHERE id in %s;", (tuple(ids),))
-    ids_in_ir_ui_view = set(row[0] for row in cr.fetchall())
-    if ids > ids_in_ir_ui_view:
-        _logger.error(
-            'Some views ids do not exist in "ir_ui_view". '
-            'Possibly passed wrong ids or "ir_model_data" in inconsistent state? '
-            f"Missing ids: {ids - ids_in_ir_ui_view}"
-        )
-
-    cr.execute(
-        """
-        UPDATE ir_ui_view SET active = TRUE
-        WHERE id IN %s
-        AND active = FALSE
-        RETURNING id;
-        """,
-        (tuple(ids),),
+    toggle_active(
+        cr,
+        "ir.ui.view",
+        ids_or_xmlids,
+        *more_ids_or_xmlids,
+        active=True,
+        ids=ids,
+        xmlids=xmlids,
+        ids_getter=get_views_ids,
     )
-    activated_views = set(row[0] for row in cr.fetchall())
-    if activated_views != ids:
-        _logger.info(f"Tried to activate views that were already active: {ids - activated_views}")
-    _logger.debug(f"Activated views: {activated_views}")
-    return activated_views
+
+
+def deactivate_views(cr, ids_or_xmlids=None, *more_ids_or_xmlids, ids=None, xmlids=None):
+    """
+    Utility function to deactivate one or more views.
+    See :func:`toggle_active` and :func:`get_views_ids` for more details about the arguments.
+    """
+    toggle_active(
+        cr,
+        "ir.ui.view",
+        ids_or_xmlids,
+        *more_ids_or_xmlids,
+        active=False,
+        ids=ids,
+        xmlids=xmlids,
+        ids_getter=get_views_ids,
+    )
 
 
 def remove_broken_dashboard_actions(cr, broken_elements_xpaths, views_ids=None):
