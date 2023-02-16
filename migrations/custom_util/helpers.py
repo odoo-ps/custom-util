@@ -75,9 +75,11 @@ def get_ids(
     :type ids: int | typing.Collection[int]
     :param xmlids: an xmlid or collection of xmlids as `str`s, whose ids will be fetched.
     :type xmlids: str | typing.Collection[str]
-    :param ensure_exist: if True, check that all the passed values match existing records in the database.
+    :param ensure_exist: ensure that all the passed values match existing records in the database.
+        If it's a string, it must be one of: "raise", "ignore", or the name of a logging level.
+        If it's a boolean, True is equivalent to "raise", False is equivalent to "ignore".
         Defaults to False.
-    :type ensure_exist: bool
+    :type ensure_exist: bool | str
     :param mapped: if True, return a mapping of the passed values to matched ids, otherwise a set of all matched ids.
         N.B. expanded xmlids (eg. partial studio ones) will be returned twice, as source and expanded form.
         Defaults to False.
@@ -97,7 +99,7 @@ def get_ids(
             return {value}
         if isinstance(value, Collection):
             return set(value)
-        raise ValueError(f'Invalid id/xmlid value type "{type(value)}": {value}')
+        raise ValueError(f"Invalid id/xmlid value type {type(value)!r}: {value}")
 
     ids = ensure_set(ids)
     xmlids = ensure_set(xmlids)
@@ -111,10 +113,17 @@ def get_ids(
             elif isinstance(i, str):
                 xmlids.add(i)
             else:
-                raise ValueError(f'Invalid id/xmlid value type "{type(i)}": {i}')
+                raise ValueError(f"Invalid id/xmlid value type {type(i)!r}: {i}")
 
     if not (ids or xmlids):
         raise TypeError("No ids or xmlids provided")
+
+    ensure_exists_log_level = logging.ERROR
+    if ensure_exist and ensure_exist not in ("raise", "ignore", True, False):
+        ensure_exists_log_level = logging.getLevelName(ensure_exist.upper())
+        # if the level is not found, getLevelName returns a weird "Level <level>" string (╯σ_σ）╯
+        if isinstance(ensure_exists_log_level, str) and "Level " in ensure_exists_log_level:
+            raise ValueError(f'Invalid value for "ensure_exist": {ensure_exist}')
 
     id_origins_map = {id_: {id_} for id_ in ids}  # id to set of origins (ie. ids, xmlids, etc.)
 
@@ -140,19 +149,23 @@ def get_ids(
         )
         xmlids_to_ids = {xmlid: res_id for res_id, xmlid in cr.fetchall()}
         id_origins_map.update((res_id, {xmlid, xmlids_origins[xmlid]}) for xmlid, res_id in xmlids_to_ids.items())
-        if ensure_exist:
+        if ensure_exist and ensure_exist != "ignore":
             missing_xmlids = xmlids - xmlids_to_ids.keys()
             if missing_xmlids:
                 id_origins_map[None] = missing_xmlids  # missing xmlids
 
-    if ensure_exist:
+    if ensure_exist and ensure_exist != "ignore":
         table = util.table_of_model(cr, model)
         cr.execute(f"SELECT array_agg(id) FROM {table} WHERE id IN %s", [tuple(id_origins_map.keys())])
         [[existing_ids]] = cr.fetchall()
         missing_ids = id_origins_map.keys() - set(existing_ids or [])
         if missing_ids:
             unmatched_origins = {origin for id_ in missing_ids | {None} for origin in id_origins_map[id_]}
-            raise IndexError(f"`{model}` records for these ids/xmlids are missing in the database: {unmatched_origins}")
+            error_message = f"`{model}` records for these ids/xmlids are missing in the database: {unmatched_origins}"
+            if ensure_exist in ("raise", True):
+                raise IndexError(error_message)
+            else:
+                _logger.log(ensure_exists_log_level, error_message)
 
     if mapped:
         ids_by_origin = defaultdict(set)
@@ -220,12 +233,11 @@ def toggle_active(
     table = util.table_of_model(cr, model)
     if not util.column_exists(cr, table, "active"):
         raise ValueError(f"Model {model} has no 'active' column")
+
     if ids_getter is None:
         ids_getter = partial(get_ids, model=model)
-    try:
-        ids = ids_getter(cr, ids_or_xmlids, *more_ids_or_xmlids, ids=ids, xmlids=xmlids, ensure_exist=True)
-    except IndexError as e:
-        _logger.error(e)  # proceeding anyways, although SH builds might fail with this
+
+    ids = ids_getter(cr, ids_or_xmlids, *more_ids_or_xmlids, ids=ids, xmlids=xmlids, ensure_exist="error")
 
     cr.execute(
         f"UPDATE {table} SET active = %s WHERE id IN %s AND active != %s RETURNING id",
