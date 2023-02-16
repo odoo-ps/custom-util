@@ -120,7 +120,8 @@ def transfer_custom_fields(cr, src_module, dest_module, fields_to_transfer):
         util.move_field_to_module(cr, model, field_name, src_module, dest_module)
         if field_new_name is None:
             field_new_name = re.sub(r"^x_(?:studio_)?", "", field_name)
-        custom_rename_field(cr, model, field_name, field_new_name)
+        if field_new_name and field_new_name != field_name:
+            custom_rename_field(cr, model, field_name, field_new_name)
 
 
 def custom_rename_module(cr, old, new):
@@ -562,7 +563,7 @@ def _rename_field(cr, model, table, old, new, old_modelname=None, remove=False):
 
 
 def _rename_m2m_relations(cr, data):
-    for (old, new, *fks) in data:
+    for old, new, *fks in data:
         if not util.table_exists(cr, old):
             _logger.debug(f"Skipping migrating m2m table {old}, table does not exist")
             return
@@ -608,14 +609,13 @@ def _rename_model_fields(cr, model, fields, old_modelname=None):
 def _upgrade_custom_models(cr, datas, skipped_models=None):
     skipped_models = skipped_models or []
 
-    for (new_modelname, old_modelname, xmlid, fields) in datas:
+    for new_modelname, old_modelname, xmlid, fields in datas:
         if new_modelname in skipped_models:
             _logger.debug(f"Skipping renaming model {old_modelname} forced")
             continue
 
         check = _check_models(cr, old_modelname, new_modelname)
         if check in (1, -1):
-
             if check == 1:
                 _logger.error(f"Skipping migrating model {new_modelname}, table already exists")
             else:
