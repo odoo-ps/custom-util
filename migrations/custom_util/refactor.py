@@ -46,7 +46,7 @@ MODELS_FIELDS_DEFAULT = {
 }
 
 
-def build_chained_replace(field_name, values_mapping):
+def build_chained_replace(field_name, values_mapping, whole_words=True):
     """
     Utility function that generates PostgreSQL query statements to replace multiple
     values for a column/field, chaining many ``regexp_replace(...)`` together.
@@ -55,6 +55,7 @@ def build_chained_replace(field_name, values_mapping):
     :param values_mapping: a mapping of values from old to new to replace.
     :return: a 2-tuple of the prepared SQL expression and a mapping of placeholder
         names to values to pass to the database driver for literal values substitution.
+    :param whole_words: whether to match only whole words or not.
     """
     sub_expr = field_name
     query_kwargs = {}
@@ -62,12 +63,14 @@ def build_chained_replace(field_name, values_mapping):
         old_placeholder = f"old{i}"
         new_placeholder = f"new{i}"
         sub_expr = f"regexp_replace({sub_expr}, %({old_placeholder})s, %({new_placeholder})s, 'g')"
-        query_kwargs[old_placeholder] = rf"\m{old_value}\M"
+        if whole_words:
+            old_value = rf"\m{old_value}\M"
+        query_kwargs[old_placeholder] = old_value
         query_kwargs[new_placeholder] = new_value
     return sub_expr, query_kwargs
 
 
-def rename_in_translation(cr, name, values_mapping, res_ids):
+def rename_in_translation(cr, name, values_mapping, res_ids, whole_words=True):
     """
     Apply renames in the translation values. This mostly applies to translated
     xml/html/jinja code (eg. from views, templates, mail templates).
@@ -77,8 +80,9 @@ def rename_in_translation(cr, name, values_mapping, res_ids):
     :param values_mapping: a mapping of old to new values to rename.
     :param res_ids: an optional collection of record ids to which the rename changes
         will be restricted to (see ``ir.translation``'s ``res_id``).
+    :param whole_words: whether to match only whole words or not.
     """
-    sub_expr, query_kwargs = build_chained_replace("value", values_mapping)
+    sub_expr, query_kwargs = build_chained_replace("value", values_mapping, whole_words=whole_words)
     where_res_ids = ""
     if res_ids:
         where_res_ids = "AND res_id IN %(res_ids)s"
@@ -90,7 +94,7 @@ def rename_in_translation(cr, name, values_mapping, res_ids):
     )
 
 
-def fix_renames_in_records(cr, names_map, model, ids_or_xmlids=None, fields=None):
+def fix_renames_in_records(cr, names_map, model, ids_or_xmlids=None, fields=None, whole_words=True):
     """
     Fix indirect references of renamed fields in existing records.
     These include for example: server actions, mail templates, etc.
@@ -101,6 +105,7 @@ def fix_renames_in_records(cr, names_map, model, ids_or_xmlids=None, fields=None
     :param ids_or_xmlids: a list of ids or xmlids to target.
     :param fields: a list of field names to be looked into.
         If None, a default list of field will be used.
+    :param whole_words: whether to match only whole words or not.
     """
     _logger.info(f'Fixing {len(names_map)} renamed fields/values referenced in "{model}"')
 
@@ -121,9 +126,11 @@ def fix_renames_in_records(cr, names_map, model, ids_or_xmlids=None, fields=None
     table_name = util.table_of_model(cr, model)
     affected_ids = set()
     for old, new in names_map.items():
+        if whole_words:
+            old = rf"\m{old}\M"
         cr.execute(
             f"UPDATE {table_name} SET {set_clauses} WHERE {where_clauses} RETURNING id",
-            dict(old_sub=rf"\m{old}\M", old_where=rf"%\m{old}\M%", new=new, ids=ids),
+            dict(old_sub=old, old_where=f"%{old}%", new=new, ids=ids),
         )
         affected_ids |= {row[0] for row in cr.fetchall()}
 
