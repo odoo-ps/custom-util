@@ -2,6 +2,7 @@
 Helper functions to manipulate views and templates.
 """
 import logging
+import uuid
 
 from lxml import etree
 from psycopg2.extras import execute_values
@@ -21,6 +22,7 @@ __all__ = [
     "convert_views_bs3_to_bs4",
     "get_website_html_fields",
     "convert_html_fields_bs3_to_bs4",
+    "create_studio_view",
     "activate_views",
     "deactivate_views",
     "remove_broken_dashboard_actions",
@@ -328,6 +330,56 @@ def deactivate_views(cr, ids_or_xmlids=None, *more_ids_or_xmlids, ids=None, xmli
         ids=ids,
         xmlids=xmlids,
         ids_getter=get_views_ids,
+    )
+
+
+def create_studio_view(cr, path, model, inherit_xml_id, type="form"):
+    """
+    Creates a new Studio view from the given file.
+    Use this helper function in an end- script.
+
+    :param cr: the database cursor.
+    :param path: the xml file from which to load the new elements.
+    :param model: the model name.
+    :param inherit_id: the id of the view to inherit from.
+    :param type: the view type. Defaults to "form".
+    """
+
+    env = util.env(cr)
+
+    if "web_studio" not in env.registry._init_modules:
+        raise RuntimeError("web_studio module not loaded, make sure to name your script as and end-script")
+
+    from odoo.addons.web_studio.controllers.main import WebStudioController
+    from odoo.addons.web_studio.models.ir_model import sanitize_for_xmlid
+
+    inherit_view = env.ref(inherit_xml_id)
+    controller = WebStudioController()
+    view_name = controller._generate_studio_view_name(inherit_view)
+    xml_id = f"{sanitize_for_xmlid(view_name)}_{uuid.uuid4()}"
+    with open(path, "r") as data:
+        xml_data = data.read()
+
+    view_id = env["ir.ui.view"].create(
+        {
+            "name": view_name,
+            "type": type,
+            "model": model,
+            "inherit_id": inherit_view.id,
+            "arch": xml_data,
+            "priority": 99,
+        }
+    )
+
+    env["ir.model.data"].create(
+        {
+            "name": xml_id,
+            "module": "studio_customization",
+            "model": "ir.ui.view",
+            "res_id": view_id.id,
+            "noupdate": True,
+            "studio": True,
+        }
     )
 
 
