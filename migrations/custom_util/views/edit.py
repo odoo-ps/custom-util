@@ -364,7 +364,7 @@ def create_studio_view(cr, path, model, inherit_xml_id, type="form"):
         {
             "name": view_name,
             "type": type,
-            "model": model,
+            "model": model if type != "qweb" else "",
             "inherit_id": inherit_view.id,
             "arch": xml_data,
             "priority": 99,
