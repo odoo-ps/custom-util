@@ -2,7 +2,6 @@
 Helper functions to manipulate views and templates.
 """
 import logging
-import uuid
 
 from lxml import etree
 from psycopg2.extras import execute_values
@@ -22,7 +21,9 @@ __all__ = [
     "convert_views_bs3_to_bs4",
     "get_website_html_fields",
     "convert_html_fields_bs3_to_bs4",
+    "reset_studio_view_priority",
     "create_studio_view",
+    "set_studio_view",
     "activate_views",
     "deactivate_views",
     "remove_broken_dashboard_actions",
@@ -333,54 +334,74 @@ def deactivate_views(cr, ids_or_xmlids=None, *more_ids_or_xmlids, ids=None, xmli
     )
 
 
-def create_studio_view(cr, path, model, inherit_xml_id, type="form"):
+def _get_studio_view_priority(cr, view):
     """
-    Creates a new Studio view from the given file.
+    Return a priority that is higher than that of any view in the hierarchy of
+    the passed view.
+    The returned value will be suitable for a new Studio view related to
+    `view`.
+    Any existing Studio view will be included in the calculation.
+    The new standard calculation will often result in priority = 160 rather
+    than the previous 99.
+
+    :param cr: the database cursor.
+    :param view: the regular view (that will have a Studio view inherit from it).
+    """
+    priority = max(view.inherit_children_ids.mapped("priority"), default=0) * 10
+    default_prio = view._fields["priority"].default(view)
+    if priority <= default_prio:
+        priority = 99
+    return priority
+
+
+def reset_studio_view_priority(cr, studio_view_xml_id):
+    """
+    Ensure that a Studio view has a priority higher than any other view in its
+    inherited hierarchy.
+    Useful if a new standard view in the hierarchy is given a high priority.
+
+    :param cr: the database cursor.
+    :param view: the Studio view to reset.
+    """
+    env = util.env(cr)
+    studio_view = env.ref(studio_view_xml_id)
+    studio_view.priority = _get_studio_view_priority(cr, studio_view.inherit_id)
+
+
+def create_studio_view(cr, path, model="", inherit_xml_id="", type="form"):
+    """
+    Backward compatibility.
+    """
+    return set_studio_view(cr, path, inherit_xml_id)
+
+
+def set_studio_view(cr, path, inherit_xml_id):
+    """
+    If a Studio view doesn't exist, create it using the arch from the supplied file,
+    otherwise update an existing Studio view, or delete it, if arch (from path) is empty.
     Use this helper function in an end- script.
 
     :param cr: the database cursor.
     :param path: the xml file from which to load the new elements.
-    :param model: the model name.
-    :param inherit_id: the id of the view to inherit from.
-    :param type: the view type. Defaults to "form".
+    :param inherit_xml_id: the id of the view to inherit from.
     """
 
     env = util.env(cr)
 
     if "web_studio" not in env.registry._init_modules:
-        raise RuntimeError("web_studio module not loaded, make sure to name your script as and end-script")
+        raise RuntimeError("web_studio module not loaded, make sure to name your script as an end-script")
 
     from odoo.addons.web_studio.controllers.main import WebStudioController
-    from odoo.addons.web_studio.models.ir_model import sanitize_for_xmlid
+    from odoo.addons.web_studio.models import ir_ui_view  # noqa: F401
+    from odoo.addons.website.tools import MockRequest
 
-    inherit_view = env.ref(inherit_xml_id)
     controller = WebStudioController()
-    view_name = controller._generate_studio_view_name(inherit_view)
-    xml_id = f"{sanitize_for_xmlid(view_name)}_{uuid.uuid4()}"
+    inherit_view = env.ref(inherit_xml_id)
     with open(path, "r") as data:
         xml_data = data.read()
 
-    view_id = env["ir.ui.view"].create(
-        {
-            "name": view_name,
-            "type": type,
-            "model": model if type != "qweb" else "",
-            "inherit_id": inherit_view.id,
-            "arch": xml_data,
-            "priority": 99,
-        }
-    )
-
-    env["ir.model.data"].create(
-        {
-            "name": xml_id,
-            "module": "studio_customization",
-            "model": "ir.ui.view",
-            "res_id": view_id.id,
-            "noupdate": True,
-            "studio": True,
-        }
-    )
+    with MockRequest(env, context=dict(studio=True)):
+        return controller._set_studio_view(inherit_view, xml_data)
 
 
 def remove_broken_dashboard_actions(cr, broken_elements_xpaths, views_ids=None):
