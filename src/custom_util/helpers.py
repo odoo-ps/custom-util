@@ -113,7 +113,7 @@ def get_ids(
             elif isinstance(i, str):
                 xmlids.add(i)
             else:
-                raise ValueError(f"Invalid id/xmlid value type {type(i)!r}: {i}")
+                raise ValueError(f"Invalid id/xmlid value type {type(i)!r}: {i}")  # noqa: TRY004
 
     if not (ids or xmlids):
         raise TypeError("No ids or xmlids provided")
@@ -121,7 +121,7 @@ def get_ids(
     ensure_exists_log_level = logging.ERROR
     if ensure_exist and ensure_exist not in {"raise", "ignore", True, False}:
         ensure_exists_log_level = logging.getLevelName(ensure_exist.upper())
-        # if the level is not found, getLevelName returns a weird "Level <level>" string (╯σ_σ）╯
+        # if the level is not found, getLevelName returns a weird "Level <level>" string (╯σ_σ）╯  # noqa
         if isinstance(ensure_exists_log_level, str) and "Level " in ensure_exists_log_level:
             raise ValueError(f'Invalid value for "ensure_exist": {ensure_exist}')
 
@@ -138,7 +138,7 @@ def get_ids(
                     xmlids.discard(xmlid)
                     xmlids.add(studio_xmlid)
                     xmlids_origins[studio_xmlid] = xmlids_origins.pop(xmlid)
-                    xmlid = studio_xmlid
+                    xmlid = studio_xmlid  # noqa: PLW2901
 
             if not len(xmlid.split(".")) == 2:
                 raise ValueError(f'xmlid must be in the "<module>.<name>" format, got: {xmlid}')
@@ -164,8 +164,7 @@ def get_ids(
             error_message = f"`{model}` records for these ids/xmlids are missing in the database: {unmatched_origins}"
             if ensure_exist in {"raise", True}:
                 raise IndexError(error_message)
-            else:
-                _logger.log(ensure_exists_log_level, error_message)
+            _logger.log(ensure_exists_log_level, error_message)
 
     if mapped:
         ids_by_origin = defaultdict(set)

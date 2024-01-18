@@ -80,7 +80,7 @@ class XPathOperation(ViewOperation, ABC):
         """
         Yields all elements found by all (compiled) xpaths.
 
-        :raises ValueError: if something other than xml elements is found.
+        :raises TypeError: if something other than xml elements is found.
         :yield: :class:`etree.Element` matching the xpath.
         """
 
@@ -88,7 +88,7 @@ class XPathOperation(ViewOperation, ABC):
             elements = xpath(arch)
             # Check return value https://lxml.de/xpathxslt.html#xpath-return-values
             if not isinstance(elements, list):
-                raise ValueError(f'XPath expression "{xpath}" does not yield elements. Got: {elements}')
+                raise TypeError(f'XPath expression "{xpath}" does not yield elements. Got: {elements}')
             if not elements:
                 _logger.warning(f"XPath expression {xpath} yielded no results")
 
@@ -107,7 +107,7 @@ class XPathOperation(ViewOperation, ABC):
             try:
                 yield etree.XPath(xpath)
             except etree.XPathSyntaxError:
-                _logger.error(f"Error evaluating xpath: {xpath}")
+                _logger.error(f"Error evaluating xpath: {xpath}")  # noqa: TRY400
                 raise
 
 

@@ -2,7 +2,6 @@
 Helper functions to manipulate views and templates.
 """
 
-import locale
 import logging
 
 from lxml import etree
@@ -389,13 +388,13 @@ def set_studio_view(cr, path, inherit_xml_id):
     if "web_studio" not in env.registry._init_modules:
         raise RuntimeError("web_studio module not loaded, make sure to name your script as an end-script")
 
-    from odoo.addons.web_studio.controllers.main import WebStudioController
-    from odoo.addons.web_studio.models import ir_ui_view  # noqa: F401
-    from odoo.addons.website.tools import MockRequest
+    from odoo.addons.web_studio.controllers.main import WebStudioController  # noqa: PLC0415
+    from odoo.addons.web_studio.models import ir_ui_view  # noqa: PLC0415,F401
+    from odoo.addons.website.tools import MockRequest  # noqa: PLC0415
 
     controller = WebStudioController()
     inherit_view = env.ref(inherit_xml_id)
-    with open(path, "r") as data:
+    with open(path, "r", encoding="utf-8") as data:
         xml_data = data.read()
 
     with MockRequest(env, context=dict(studio=True)):

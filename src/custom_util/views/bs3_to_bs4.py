@@ -94,7 +94,7 @@ def simple_css_selector_to_xpath(selector):
     xpath_parts = []
     combinators = "+>,~ "
     for selector_part in re.split(rf"(\s*[{combinators}]\s*)", selector):
-        selector_part = selector_part.strip()
+        selector_part = selector_part.strip()  # noqa: PLW2901
 
         if not selector_part:
             separator = "//"
@@ -458,7 +458,7 @@ class BS3to4Converter:
                     for operation in operations:
                         if element is None:  # previous operations that returned None (ie. deleted element)
                             raise ValueError("Matched xml element is not available anymore! Check operations.")
-                        element = operation.on(element, self)
+                        element = operation.on(element, self)  # noqa: PLW2901
         return self.tree
 
     @classmethod

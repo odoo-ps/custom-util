@@ -165,7 +165,7 @@ def update_relationships(cr, model, old_id, new_id):
     N.B. `reference` and `many2one_reference` are not handled.
     """
     # TODO: kept for backwards-compatibility, just remove?
-    warnings.warn("Use `util.replace_record_references` instead", DeprecationWarning)
+    warnings.warn("Use `util.replace_record_references` instead", DeprecationWarning, stacklevel=1)
     cr.execute(
         """
         SELECT name, model, ttype, relation_table, column1, column2
@@ -183,14 +183,14 @@ def update_relationships(cr, model, old_id, new_id):
 
     _logger.info(f'Updating relationships to "{model}" from record id {old_id} to {new_id}')
 
-    for name, model, ttype, relation_table, column1, column2 in related_fields:
+    for name, rel_model, ttype, relation_table, column1, column2 in related_fields:
         if ttype == "many2one":
             cr.execute(
                 """
                 UPDATE "{table}"
                    SET "{column}" = %(new_id)s
                  WHERE "{column}" = %(old_id)s
-                """.format(table=util.table_of_model(cr, model), column=name),
+                """.format(table=util.table_of_model(cr, rel_model), column=name),
                 dict(old_id=old_id, new_id=new_id),
             )
         elif ttype == "many2many":
@@ -212,7 +212,7 @@ def update_relationships(cr, model, old_id, new_id):
                 dict(old_id=old_id),
             )
         else:
-            _logger.error(f'Got unhandled ttype "{ttype}" for field "{model}.{name}"')
+            _logger.error(f'Got unhandled ttype "{ttype}" for field "{rel_model}.{name}"')
             continue
 
 
@@ -393,7 +393,7 @@ def merge_model_and_data(cr, source_model, target_model, copy_fields, set_values
         elif isinstance(field_spec, (list, tuple)):
             field_src, field_dest = tuple(field_spec)
         else:
-            raise ValueError("Invalid value for field name.")
+            raise TypeError("Invalid value for field name.")
 
         if not util.column_exists(cr, target_table, field_dest):
             column_type = util.column_type(cr, source_table, field_src)
@@ -522,7 +522,7 @@ def rename_xmlids(cr, pairs, detect_module=True, noupdate=None):
             old_module, old_name = process_xmlid(old_xmlid_raw)
             new_module, new_name = process_xmlid(new_xmlid_raw)
         except ValueError as exc:
-            _logger.error(f"Skipping xmlid rename {old_xmlid_raw} => {new_xmlid_raw}: {exc}")
+            _logger.error(f"Skipping xmlid rename {old_xmlid_raw} => {new_xmlid_raw}: {exc}")  # noqa: TRY400
             continue
 
         old_xmlid = f"{old_module}.{old_name}"
@@ -592,7 +592,7 @@ def _rename_m2m_relations(cr, data):
 def _rename_model_fields(cr, model, fields, old_modelname=None):
     table = util.table_of_model(cr, model)
     for field in fields:
-        field = list(field)
+        field = list(field)  # noqa: PLW2901
         if len(field) < 3:
             field.append({})
 
@@ -743,13 +743,13 @@ def set_not_imported_modules(cr, modules):
     """
     if not modules:
         raise AttributeError("Must provide at least one module name to update")
-    elif isinstance(modules, str):
+    if isinstance(modules, str):
         modules = [modules]
     cr.execute(
         """
         UPDATE ir_module_module
            SET imported = FALSE
          WHERE name IN %s
-    """,
+        """,
         [tuple(modules)],
     )

@@ -78,7 +78,7 @@ class ViewKey:
         for view_key in keys:
             if not isinstance(view_key, ViewKey):
                 raise TypeError(f"`keys` must be instances of {cls_name}")
-            elif isinstance(view_key.website_id, int):
+            if isinstance(view_key.website_id, int):
                 where_clauses["(key, website_id) IN %s"].append((view_key.key, view_key.website_id))
             elif view_key.website_id is None:
                 where_clauses["(key IN %s AND website_id IS NULL)"].append(view_key.key)
@@ -252,8 +252,8 @@ def get_views_ids(
 
         if create_missing_cows:
             missing_keys_by_website = defaultdict(set)
-            for view_key, ids in list(ids_by_key.items()):
-                if not ids:
+            for view_key, cow_ids in list(ids_by_key.items()):
+                if not cow_ids:
                     if view_key.website_id in {WebsiteId.NOTNULL, WebsiteId.NOTSET}:
                         if not isinstance(website_id, int):
                             raise TypeError(f"Tried using `create_missing_cows` without `website_id`: {view_key}")
@@ -394,10 +394,7 @@ def extract_elements(arch, xpaths, view_name=None):
     if isinstance(xpaths, str):
         xpaths = [xpaths]
 
-    extracted_elements = []
-    for xpath in xpaths:
-        for element in arch.xpath(xpath):
-            extracted_elements.append(etree.tostring(element, encoding=str))
+    extracted_elements = [etree.tostring(element, encoding=str) for xpath in xpaths for element in arch.xpath(xpath)]
 
     if not extracted_elements:
         view_name_msg = f"view {view_name}" if view_name else "arch"
@@ -440,7 +437,6 @@ def indent_tree(elem, level=0):
             indent_tree(subelem, level + 1)
         if not subelem.tail or not subelem.tail.strip():
             subelem.tail = i
-    else:
-        if level and (not elem.tail or not elem.tail.strip()):
-            elem.tail = i
+    elif level and (not elem.tail or not elem.tail.strip()):
+        elem.tail = i
     return elem

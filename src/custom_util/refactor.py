@@ -64,9 +64,7 @@ def build_chained_replace(field_name, values_mapping, whole_words=True):
         old_placeholder = f"old{i}"
         new_placeholder = f"new{i}"
         sub_expr = f"regexp_replace({sub_expr}, %({old_placeholder})s, %({new_placeholder})s, 'g')"
-        if whole_words:
-            old_value = rf"\m{old_value}\M"
-        query_kwargs[old_placeholder] = old_value
+        query_kwargs[old_placeholder] = rf"\m{old_value}\M" if whole_words else old_value
         query_kwargs[new_placeholder] = new_value
     return sub_expr, query_kwargs
 
@@ -127,11 +125,10 @@ def fix_renames_in_records(cr, names_map, model, ids_or_xmlids=None, fields=None
     table_name = util.table_of_model(cr, model)
     affected_ids = set()
     for old, new in names_map.items():
-        if whole_words:
-            old = rf"\m{old}\M"
+        old_re = rf"\m{old}\M" if whole_words else old
         cr.execute(
             f"UPDATE {table_name} SET {set_clauses} WHERE {where_clauses} RETURNING id",
-            dict(old_sub=old, old_where=f"%{old}%", new=new, ids=ids),
+            dict(old_sub=old_re, old_where=f"%{old_re}%", new=new, ids=ids),
         )
         affected_ids |= {row[0] for row in cr.fetchall()}
 
