@@ -1,6 +1,8 @@
 """
 Helper functions to manipulate views and templates.
 """
+
+import locale
 import logging
 
 from lxml import etree
@@ -154,15 +156,13 @@ def get_website_views_ids(cr, keys, website_id=WebsiteId.NOTNULL, create_missing
         raise ValueError('Must specify a "website_id" when using "create_missing"')
 
     view_keys = [ViewKey(key, website_id) if isinstance(key, str) else key for key in keys]
-    keys_to_id_map = {
+    return {
         view_key.key: view_id
         for view_key, view_ids in get_views_ids(
             cr, keys=view_keys, website_id=website_id, create_missing_cows=create_missing, mapped=True
         )
         for (view_id,) in (view_ids,)  # raise if len != 1, don't look too close
     }
-
-    return keys_to_id_map
 
 
 def edit_website_views(cr, view_operations, website_id=WebsiteId.NOTNULL, create_missing=False, verbose=True):
@@ -227,11 +227,9 @@ def get_website_html_fields(cr):
     )
     website_html_fields = cr.fetchall()
     # Add other fields that contain HTML data but are exceptions to the query above.
-    website_html_fields.extend(
-        [
-            ("event.event", "description"),
-        ]
-    )
+    website_html_fields.extend([
+        ("event.event", "description"),
+    ])
     return [
         (model, field)
         for model, field in website_html_fields
@@ -443,8 +441,7 @@ def cleanup_old_dashboards(cr):
     """
     # Delete obsolete (COW) dashboard records
     _logger.info("Cleaning up obsolete dashboard records (COW)")
-    cr.execute(
-        """
+    cr.execute("""
         WITH sorted_dashboards AS (
             SELECT id, ROW_NUMBER() OVER (PARTITION BY user_id, ref_id
                                           ORDER BY create_date DESC) AS row_no
@@ -454,6 +451,5 @@ def cleanup_old_dashboards(cr):
          WHERE EXISTS (SELECT 1
                          FROM sorted_dashboards d
                         WHERE d.id = iuvc.id AND d.row_no > 1)
-        """
-    )
+    """)
     _logger.info(f"Deleted {cr.rowcount} old dashboard views")

@@ -190,9 +190,7 @@ def update_relationships(cr, model, old_id, new_id):
                 UPDATE "{table}"
                    SET "{column}" = %(new_id)s
                  WHERE "{column}" = %(old_id)s
-                """.format(
-                    table=util.table_of_model(cr, model), column=name
-                ),
+                """.format(table=util.table_of_model(cr, model), column=name),
                 dict(old_id=old_id, new_id=new_id),
             )
         elif ttype == "many2many":
@@ -203,18 +201,14 @@ def update_relationships(cr, model, old_id, new_id):
                        FROM "{table}"
                       WHERE "{column2}" = %(old_id)s
                 ON CONFLICT DO NOTHING
-                """.format(
-                    table=relation_table, column1=column1, column2=column2
-                ),
+                """.format(table=relation_table, column1=column1, column2=column2),
                 dict(old_id=old_id, new_id=new_id),
             )
             cr.execute(
                 """
                 DELETE FROM "{table}"
                       WHERE "{column2}" = %(old_id)s
-                """.format(
-                    table=relation_table, column2=column2
-                ),
+                """.format(table=relation_table, column2=column2),
                 dict(old_id=old_id),
             )
         else:
@@ -615,7 +609,7 @@ def _upgrade_custom_models(cr, datas, skipped_models=None):
             continue
 
         check = _check_models(cr, old_modelname, new_modelname)
-        if check in (1, -1):
+        if check in {1, -1}:
             if check == 1:
                 _logger.error(f"Skipping migrating model {new_modelname}, table already exists")
             else:
@@ -700,29 +694,25 @@ def migrate_invoice_move_data(cr, fields=None, lines_fields=None, overwrite=Fals
 
     if fields:
         set_stmts, where_not_null = prepare_statements(fields, "am", "ai")
-        cr.execute(
-            f"""
+        cr.execute(f"""
             UPDATE account_move am
                SET {", ".join(set_stmts)}
               FROM account_invoice ai
              WHERE ai.move_id = am.id
                AND ({" OR ".join(where_not_null)})
-            """
-        )
+        """)
         _logger.debug(f'Updated {cr.rowcount} "account.move" records')
 
     if lines_fields:
         set_stmts, where_not_null = prepare_statements(lines_fields, "aml", "ail")
-        cr.execute(
-            f"""
+        cr.execute(f"""
             UPDATE account_move_line aml
                SET {", ".join(set_stmts)}
               FROM account_invoice_line ail
               JOIN invl_aml_mapping map ON map.invl_id=ail.id
              WHERE aml.id = map.aml_id
                AND ({" OR ".join(where_not_null)})
-            """
-        )
+        """)
         _logger.debug(f'Updated {cr.rowcount} "account.move.line" records')
 
 

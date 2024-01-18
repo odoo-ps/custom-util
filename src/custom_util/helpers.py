@@ -119,7 +119,7 @@ def get_ids(
         raise TypeError("No ids or xmlids provided")
 
     ensure_exists_log_level = logging.ERROR
-    if ensure_exist and ensure_exist not in ("raise", "ignore", True, False):
+    if ensure_exist and ensure_exist not in {"raise", "ignore", True, False}:
         ensure_exists_log_level = logging.getLevelName(ensure_exist.upper())
         # if the level is not found, getLevelName returns a weird "Level <level>" string (╯σ_σ）╯
         if isinstance(ensure_exists_log_level, str) and "Level " in ensure_exists_log_level:
@@ -162,7 +162,7 @@ def get_ids(
         if missing_ids:
             unmatched_origins = {origin for id_ in missing_ids | {None} for origin in id_origins_map[id_]}
             error_message = f"`{model}` records for these ids/xmlids are missing in the database: {unmatched_origins}"
-            if ensure_exist in ("raise", True):
+            if ensure_exist in {"raise", True}:
                 raise IndexError(error_message)
             else:
                 _logger.log(ensure_exists_log_level, error_message)
@@ -243,7 +243,7 @@ def toggle_active(
         f"UPDATE {table} SET active = %s WHERE id IN %s AND active != %s RETURNING id",
         (active, tuple(ids), active),
     )
-    changed_ids = set(row[0] for row in cr.fetchall())
+    changed_ids = {row[0] for row in cr.fetchall()}
     if changed_ids != ids:
         action = "activate" if active else "deactivate"
         _logger.info(

@@ -4,12 +4,13 @@ Python script and module to convert a XML/HTML document with Bootstrap v3 to v4.
 Can be imported as a module, or run as a standalone script, providing the path of the file to convert inplace.
 Requires ``lxml`` as external dependency to be installed.
 """
+
 import os.path
 import re
 import sys
 from contextlib import contextmanager
 
-import lxml.etree as etree
+from lxml import etree
 
 
 # TODO: also handle qweb-specific t-att(f)- attributes?
@@ -192,7 +193,7 @@ class PullUp(ElementOperation):
             element.addprevious(child)
 
         parent.remove(element)
-        return None
+        return None  # noqa: RET501,PLR1711
 
 
 class ConvertBlockquote(ElementOperation):
@@ -256,10 +257,7 @@ class ConvertCard(ElementOperation):
             add_classes = "card-header"
             remove_classes = ["header", "image"]
         elif "content" in classes:
-            if "card-background" in old_card_classes:
-                add_classes = "card-img-overlay"
-            else:
-                add_classes = "card-body"
+            add_classes = "card-img-overlay" if "card-background" in old_card_classes else "card-body"
             remove_classes = "content"
         elif {"card-footer", "footer", "text-center"} & set(classes):
             add_classes = "card-footer"

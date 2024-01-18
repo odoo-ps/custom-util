@@ -1,6 +1,7 @@
 """
 Misc collection of helper classes and functions to fetch and fix views.
 """
+
 import enum
 from collections import defaultdict
 from typing import Collection, Sequence
@@ -94,15 +95,15 @@ class ViewKey:
         )
         res_by_id = {id_: (key, website_id) for id_, key, website_id in cr.fetchall()}
         ids_by_key = {
-            vk: set(id_ for id_, (view_key, website_id) in res_by_id.items() if vk.matches(view_key, website_id))
+            vk: {id_ for id_, (view_key, website_id) in res_by_id.items() if vk.matches(view_key, website_id)}
             for vk in keys
         }
 
-        unmatched_ids = res_by_id.keys() - set(id_ for ids in ids_by_key.values() for id_ in ids)
+        unmatched_ids = res_by_id.keys() - {id_ for ids in ids_by_key.values() for id_ in ids}
         assert not unmatched_ids, f"Query returned ids that don't match any {cls_name}: {unmatched_ids}"
 
         keys_by_website = {
-            website_id: set(vk for vk, ids in ids_by_key.items() if id_ in ids)
+            website_id: {vk for vk, ids in ids_by_key.items() if id_ in ids}
             for id_, (_, website_id) in res_by_id.items()
         }
         for view_key in keys:  # sanity check
@@ -165,7 +166,7 @@ class ViewKey:
         return False
 
     def __repr__(self):
-        return f"{self.__class__.__name__}({repr(self.key)}, {repr(self.website_id)})"
+        return f"{self.__class__.__name__}({self.key!r}, {self.website_id!r})"
 
 
 def get_views_ids(
@@ -253,7 +254,7 @@ def get_views_ids(
             missing_keys_by_website = defaultdict(set)
             for view_key, ids in list(ids_by_key.items()):
                 if not ids:
-                    if view_key.website_id in (WebsiteId.NOTNULL, WebsiteId.NOTSET):
+                    if view_key.website_id in {WebsiteId.NOTNULL, WebsiteId.NOTSET}:
                         if not isinstance(website_id, int):
                             raise TypeError(f"Tried using `create_missing_cows` without `website_id`: {view_key}")
                         key_website_id = website_id

@@ -1,6 +1,7 @@
 """
 Classes that define and implement operations that can be performed on xml views elements.
 """
+
 import enum
 import logging
 from abc import ABC, abstractmethod
@@ -59,7 +60,7 @@ class ViewOperation(ABC):
         yield self
 
 
-class XPathOperation(ViewOperation, ABC):  # noqa: B024
+class XPathOperation(ViewOperation, ABC):
     """
     Abstract base class for operations that use XPath selectors to match elements.
 
@@ -194,13 +195,13 @@ class AddElements(XPathOperation):
     def __call__(self, arch, cr=None):
         Pos = AddElementPosition  # better readability
         for el in self.get_elements(arch):
-            if self.position in (Pos.INSIDE, Pos.BEFORE):
+            if self.position in {Pos.INSIDE, Pos.BEFORE}:
                 for new_el in self.elements:
                     if self.position is Pos.INSIDE:
                         el.append(new_el)
                     elif self.position is Pos.BEFORE:
                         el.addprevious(new_el)
-            elif self.position in (Pos.AFTER, Pos.REPLACE):
+            elif self.position in {Pos.AFTER, Pos.REPLACE}:
                 for new_el in reversed(self.elements):
                     el.addnext(new_el)
                 if self.position is Pos.REPLACE:

@@ -3,6 +3,7 @@ Utility functions that perform refactor-related migration operations.
 These are usually operations that require coordination across multiple models,
 records, and changes, and need to be executed in a specific order.
 """
+
 import logging
 from collections import defaultdict
 from typing import MutableMapping
