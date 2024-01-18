@@ -50,4 +50,11 @@ Temporary Items
 .settings
 .mypy_cache
 
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+src/_version.py
+
 # Project-specific files and directories
