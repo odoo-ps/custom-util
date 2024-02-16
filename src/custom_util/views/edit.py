@@ -7,6 +7,8 @@ import logging
 from lxml import etree
 from psycopg2.extras import execute_values
 
+from odoo.tools.misc import file_path
+
 from odoo.upgrade import util
 
 from ..helpers import toggle_active
@@ -29,6 +31,7 @@ __all__ = [
     "deactivate_views",
     "remove_broken_dashboard_actions",
     "cleanup_old_dashboards",
+    "replace_view_from_file",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -452,3 +455,61 @@ def cleanup_old_dashboards(cr):
                         WHERE d.id = iuvc.id AND d.row_no > 1)
     """)
     _logger.info(f"Deleted {cr.rowcount} old dashboard views")
+
+
+def replace_view_from_file(cr, path_with_module, *, xmlid=None, view_id=None, key=None, cowed=True):
+    """
+    Replace the content of the view given by xmlid, its id, or its key with the content
+    of the XML file at the given path.
+    The XML file has to be in the same module as the migration script using this method.
+    We recommend following this structure:
+
+    <custom_module>/
+    ├── migrations/
+    │   └── <version>/
+    │       └── replace_views.py
+    │       └── studio_views/
+    │           └── studio_customization.odoo_studio_default__2d6561f5-09d6-4a9c-81b6-a59e40420560.xml
+    │       └──website_views/
+    │           └──how_to_plant_trees.xml
+    └       └── ...
+
+    Examples ::
+    replace_view_content(cr,
+        "my_custom_module/migrations/16.0.1.0.0/website_views/how_to_plant_trees.xml", key="website.how-to-plant-trees"
+    )
+
+
+    :param cr: the database cursor.
+    :type cr: psycopg2.cursor
+    :param path_with_module: the path (from the module name included) to the XML file to parse.
+    :type path_with_module: str
+    :param xmlid: the xmlid of the view to replace.
+    :type xmlid: str
+    :param view_id: the id of the view to replace.
+    :type view_id: int | None
+    :param key: the key of the view to replace.
+    :type key: ViewKey | None
+    :param cowed: if True and the key is specified, applies on the COWed view instead.
+    :type cowed: bool
+    """
+    # Fetching the view_id from parameters
+    if xmlid:
+        view_id = util.ref(cr, xmlid)
+    if key:
+        env = util.env(cr)
+        domain = [("key", "=", key)]
+        if cowed:
+            domain.append(("website_id", "!=", False))
+        view_id = env["ir.ui.view"].search(domain).id
+    if not view_id:
+        raise ValueError(f"View ({xmlid=}, {view_id=}, {key=}) not found")
+
+    # Replacing the content of the view
+    with util.edit_view(cr, view_id=view_id) as arch:
+        new_arch = etree.parse(file_path(path_with_module)).getroot()
+
+        for child in arch:
+            arch.remove(child)
+
+        arch.extend(new_arch.getchildren())
