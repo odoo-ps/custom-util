@@ -112,7 +112,7 @@ def edit_views(
         if not operations:  # silently skip views with no operations
             continue
         for view_id in views_ids_map[id_origin]:
-            with util.edit_view(cr, view_id=view_id, skip_if_not_noupdate=False) as arch:
+            with util.edit_view(cr, view_id=view_id, skip_if_not_noupdate=False, active=True) as arch:
                 _logger.log(
                     logging.INFO if verbose else logging.DEBUG,
                     f'Patching ir.ui.view "{id_origin}" (id={view_id})',
