@@ -7,6 +7,8 @@ import logging
 from lxml import etree
 from psycopg2.extras import execute_values
 
+from odoo.tools.misc import mute_logger
+
 from odoo.upgrade import util
 
 from ..helpers import toggle_active
@@ -382,7 +384,6 @@ def set_studio_view(cr, path, inherit_xml_id):
     :param path: the xml file from which to load the new elements.
     :param inherit_xml_id: the id of the view to inherit from.
     """
-
     env = util.env(cr)
 
     if "web_studio" not in env.registry._init_modules:
@@ -394,10 +395,10 @@ def set_studio_view(cr, path, inherit_xml_id):
 
     controller = WebStudioController()
     inherit_view = env.ref(inherit_xml_id)
-    with open(path, "r", encoding="utf-8") as data:
+    with open(path, encoding="utf-8") as data:
         xml_data = data.read()
 
-    with MockRequest(env, context=dict(studio=True)):
+    with mute_logger("odoo.tests.common"), MockRequest(env, context=dict(studio=True)):
         return controller._set_studio_view(inherit_view, xml_data)
 
 
