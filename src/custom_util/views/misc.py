@@ -225,7 +225,7 @@ def get_views_ids(
             view_keys.add(value)
             return None
         if coerce_str and isinstance(value, str):
-            view_keys.add(ViewKey(key, website_id))
+            view_keys.add(ViewKey(value, website_id))
             return None
         if isinstance(value, Collection) and not isinstance(value, str):
             # recurse to add view_keys to set and convert them to None in the iterable
@@ -233,7 +233,7 @@ def get_views_ids(
             return [v for v in value if v is not None]
         return value
 
-    get_view_keys(keys, coerce_str=True)
+    keys = get_view_keys(keys, coerce_str=True)
     assert not keys, "all keys should have been consumed, otherwise got unhandled types"
     views = get_view_keys(views)
     more_views = get_view_keys(more_views)
