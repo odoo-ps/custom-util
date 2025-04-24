@@ -393,13 +393,27 @@ def set_studio_view(cr, path, inherit_xml_id):
     from odoo.addons.web_studio.models import ir_ui_view  # noqa: PLC0415,F401
     from odoo.addons.website.tools import MockRequest  # noqa: PLC0415
 
+    # NOTE: This is to avoid some issues with tests and MockServer on 18.0
+    if util.version_gte("18.0"):
+        from odoo.service.server import ThreadedServer, server  # noqa: PLC0415
+        from odoo.tools import config  # noqa: PLC0415
+
+        config["test_enable"] = True
+        if type(server) == ThreadedServer and not server.httpd:
+            ThreadedServer.http_spawn(server)
+
     controller = WebStudioController()
     inherit_view = env.ref(inherit_xml_id)
     with open(path, encoding="utf-8") as data:
         xml_data = data.read()
 
     with mute_logger("odoo.tests.common"), MockRequest(env, context=dict(studio=True)):
-        return controller._set_studio_view(inherit_view, xml_data)
+        view = controller._set_studio_view(inherit_view, xml_data)
+
+    if util.version_gte("18.0"):
+        config["test_enable"] = False
+
+    return view
 
 
 def remove_broken_dashboard_actions(cr, broken_elements_xpaths, views_ids=None):
