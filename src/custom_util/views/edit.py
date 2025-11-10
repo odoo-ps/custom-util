@@ -7,8 +7,6 @@ import logging
 from lxml import etree
 from psycopg2.extras import execute_values
 
-from odoo.tools.misc import mute_logger
-
 from odoo.upgrade import util
 
 from ..helpers import toggle_active
@@ -389,10 +387,6 @@ def set_studio_view(cr, path, inherit_xml_id):
     if "web_studio" not in env.registry._init_modules:
         raise RuntimeError("web_studio module not loaded, make sure to name your script as an end-script")
 
-    from odoo.addons.web_studio.controllers.main import WebStudioController  # noqa: PLC0415
-    from odoo.addons.web_studio.models import ir_ui_view  # noqa: PLC0415,F401
-    from odoo.addons.website.tools import MockRequest  # noqa: PLC0415
-
     # NOTE: This is to avoid some issues with tests and MockServer on 18.0
     if util.version_gte("18.0"):
         from odoo.service.server import ThreadedServer, server  # noqa: PLC0415
@@ -402,12 +396,19 @@ def set_studio_view(cr, path, inherit_xml_id):
         if type(server) == ThreadedServer and not server.httpd:
             ThreadedServer.http_spawn(server)
 
+    from odoo.addons.web_studio.controllers.main import WebStudioController  # noqa: PLC0415
+    from odoo.addons.web_studio.models import ir_ui_view  # noqa: PLC0415,F401
+    if util.version_gte("19.0"):
+        from odoo.addons.http_routing.tests.common import MockRequest  # noqa: PLC0415
+    else:
+        from odoo.addons.website.tools import MockRequest  # noqa: PLC0415
+
     controller = WebStudioController()
     inherit_view = env.ref(inherit_xml_id)
     with open(path, encoding="utf-8") as data:
         xml_data = data.read()
 
-    with mute_logger("odoo.tests.common"), MockRequest(env, context=dict(studio=True)):
+    with MockRequest(env, context=dict(studio=True)):
         view = controller._set_studio_view(inherit_view, xml_data)
 
     if util.version_gte("18.0"):
