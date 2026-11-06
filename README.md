@@ -521,7 +521,7 @@ AddElementsFromFile(
 )
 ```
 
-#### `CopyElements(source_xpaths, dest_xpaths, from_view=None, **kwargs)`
+#### `CopyElements(source_xpaths, xpaths, from_view=None, **kwargs)`
 
 Copy elements from another part of the same view, or from a completely different view identified
 by xmlid or integer id:

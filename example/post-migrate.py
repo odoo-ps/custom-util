@@ -8,7 +8,7 @@ from odoo.upgrade.custom_util import (
 )
 
 
-def migrate(cr):
+def migrate(cr, version):
     # 1. Flush all queued field renames into server actions, mail templates,
     #    automation domains/code, and any other records that store field names as text.
     do_pending_refactors(cr)
